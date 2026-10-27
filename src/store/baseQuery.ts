@@ -28,7 +28,7 @@ const toApiError = (e: FetchBaseQueryError): ApiError => {
 // (or { data, meta } for paged lists).
 const unwrap = (body: unknown) => {
   if (body && typeof body === 'object' && 'success' in body) {
-    const b = body as { data: unknown; meta?: unknown };
+    const b = body as unknown as { data: unknown; meta?: unknown };
     return b.meta ? { data: b.data, meta: b.meta } : b.data;
   }
   return body;
@@ -63,7 +63,7 @@ const withRetry = retry(
   async (args: string | FetchArgs, api, extra) => {
     const result = await withAuth(args, api, extra);
     if (result.error) {
-      const a = typeof args === 'string' ? { method: 'GET' } : args;
+      const a: FetchArgs = typeof args === 'string' ? { url: args, method: 'GET' } : args;
       const method = (a.method || 'GET').toUpperCase();
       const safe = method === 'GET' || Boolean((a.headers as Record<string, string> | undefined)?.['Idempotency-Key']);
       // Returning the error makes retry() try again; fail() stops it.

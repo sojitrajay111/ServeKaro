@@ -12,7 +12,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { FieldError, FormError } from '@/components/AuthShell';
-import { useSignupMutation } from '@/store/endpoints/auth';
+import { useSignupMutation, type SignupInput } from '@/store/endpoints/auth';
 import { isApiError } from '@/lib/apiError';
 
 const schema = z.object({
@@ -53,7 +53,7 @@ const RestaurantSignUp = () => {
   const onSubmit = async ({ confirm: _confirm, ...data }: Form) => {
     setFormError('');
     try {
-      await signup(data).unwrap();
+      await signup(data as SignupInput).unwrap();
       toast.success('Your restaurant is ready. Add your GSTIN and menu next.');
       navigate('/admin/settings');
     } catch (err) {

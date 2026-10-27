@@ -10,7 +10,6 @@ import { useCan } from "@/hooks/useCan";
 import LandingPage from "./pages/LandingPage";
 import RestaurantSignUp from "./pages/RestaurantSignUp";
 import RestaurantMenu, { TableMenuPage } from "./pages/RestaurantMenu";
-import About from "./pages/About";
 import { OrdersPage, TrackOrderPage } from "./pages/customer/OrdersPage";
 import NotFound from "./pages/NotFound";
 import { AdminLayout } from "./pages/admin/AdminLayout";
@@ -54,7 +53,6 @@ const App = () => (
           <Routes>
             <Route path="/" element={<LandingPage />} />
             <Route path="/signup" element={<RestaurantSignUp />} />
-            <Route path="/about" element={<About />} />
             <Route path="/verify-email" element={<VerifyEmailPage />} />
 
             {/* Customer */}

@@ -36,7 +36,7 @@ export const reportsApi = api.injectEndpoints({
       providesTags: ['Report', 'Shift'],
     }),
     auditLogs: b.query<Paged<AuditEntry>, { action?: string; page?: number } | void>({
-      query: (f) => `/audit-logs?page=${f?.page ?? 1}&limit=50${f?.action ? `&action=${f.action}` : ''}`,
+      query: (arg) => { const f = (arg ?? {}) as Exclude<typeof arg, void>; return `/audit-logs?page=${f.page ?? 1}&limit=50${f.action ? `&action=${f.action}` : ''}`; },
       providesTags: ['Audit'],
     }),
   }),

@@ -7,7 +7,7 @@ const billChanged = (id: Id) => [{ type: 'Bill' as const, id }, { type: 'Bill' a
 export const billingApi = api.injectEndpoints({
   endpoints: (b) => ({
     bills: b.query<Paged<Bill>, { status?: BillStatus; from?: string; to?: string; q?: string; page?: number; limit?: number } | void>({
-      query: (f) => {
+      query: (arg) => { const f = (arg ?? {}) as Exclude<typeof arg, void>;
         const p = new URLSearchParams({ page: String(f?.page ?? 1), limit: String(f?.limit ?? 50) });
         if (f?.status) p.set('status', f.status);
         if (f?.from) p.set('from', f.from);
@@ -55,7 +55,7 @@ export const billingApi = api.injectEndpoints({
       providesTags: ['Shift'],
     }),
     shifts: b.query<Paged<Shift>, { page?: number } | void>({
-      query: (f) => `/shifts?page=${f?.page ?? 1}&limit=30`,
+      query: (arg) => `/shifts?page=${((arg ?? {}) as { page?: number }).page ?? 1}&limit=30`,
       providesTags: ['Shift'],
     }),
     openShift: b.mutation<Shift, { openingCash: number }>({

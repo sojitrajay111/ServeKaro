@@ -80,7 +80,7 @@ export const ordersApi = api.injectEndpoints({
     }),
 
     kots: b.query<Kot[], { status?: KotStatus[]; stationId?: Id } | void>({
-      query: (f) => {
+      query: (arg) => { const f = (arg ?? {}) as Exclude<typeof arg, void>;
         const p = new URLSearchParams();
         if (f?.status?.length) p.set('status', f.status.join(','));
         if (f?.stationId) p.set('stationId', f.stationId);
