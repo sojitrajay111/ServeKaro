@@ -1,592 +1,313 @@
-import React, { useState } from 'react';
-import { motion } from 'framer-motion';
-import {
-  Plus,
-  Search,
-  Edit,
-  Trash2,
-  Eye,
-  EyeOff,
-  MoreVertical,
-  Star,
-  Clock,
-  Database
-} from 'lucide-react';
-import { MenuManagementSkeleton } from '@/components/SkeletonLoaders';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { useGetCategoriesQuery, useGetMenuItemsQuery, MenuItem as ApiMenuItem, useSaveMenuItemMutation, useDeleteMenuItemMutation } from '@/store/menuApi';
-import { MenuItem } from '@/contexts/MenuContext';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import { EditItemModal } from '@/components/admin/EditItemModal';
-import { AddItemModal } from '@/components/admin/AddItemModal';
-import { AddCategoryModal } from '@/components/admin/AddCategoryModal';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import React, { useMemo, useState } from 'react';
+import { ArrowDown, ArrowUp, Edit, Loader2, Plus, Search, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
+import { Badge } from '@/components/ui/badge';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { FoodTypeMark } from '@/components/FoodTypeMark';
+import { ItemFormDialog } from '@/components/admin/ItemFormDialog';
+import {
+  useCreateAddonGroupMutation, useCreateCategoryMutation, useCreateStationMutation, useDeleteAddonGroupMutation,
+  useDeleteCategoryMutation, useDeleteItemMutation, useDeleteStationMutation, useMenuQuery, useReorderCategoriesMutation,
+  useSetStockMutation, useUpdateAddonGroupMutation, useUpdateCategoryMutation, useUpdateStationMutation, type AddonGroupInput,
+} from '@/store/endpoints/menu';
+import { useCan } from '@/hooks/useCan';
+import { formatMoney, toPaise, toRupees } from '@/lib/money';
+import { toastError } from '@/lib/apiError';
+import type { AddonGroup, MenuItem } from '@/types/api';
 
-export const MenuManagement: React.FC = () => {
-  // Use RTK Query to fetch data
-  const { data: categories = [], isLoading: isLoadingCategories } = useGetCategoriesQuery();
-  
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState<number | null>(null);
-  const [showSoldOut, setShowSoldOut] = useState(false);
-
-  // Reset to first page whenever filters change
-  React.useEffect(() => { setCurrentPage(1); }, [searchQuery, selectedCategory, showSoldOut]);
-  const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
-  const [pendingDeleteItem, setPendingDeleteItem] = useState<ApiMenuItem | null>(null);
-  const [isAddItemModalOpen, setIsAddItemModalOpen] = useState(false);
-  const [isAddCategoryModalOpen, setIsAddCategoryModalOpen] = useState(false);
-  const [currentPage, setCurrentPage] = useState(1);
-  const PAGE_SIZE = 12;
-
-  // Fetch menu items - all items if no category selected, or filtered by category
-  const { data: allMenuItems = [], isLoading: isLoadingItems, refetch: refetchItems } = useGetMenuItemsQuery(
-    { categoryId: selectedCategory || undefined },
-    { skip: false }
+// Small confirm helper so deletes always ask first.
+function useConfirm() {
+  const [state, setState] = useState<{ title: string; body: string; run: () => Promise<unknown> } | null>(null);
+  const dialog = (
+    <AlertDialog open={Boolean(state)} onOpenChange={(o) => !o && setState(null)}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{state?.title}</AlertDialogTitle>
+          <AlertDialogDescription>{state?.body}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction onClick={() => state?.run().catch(toastError)}>Delete</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
+  return [dialog, setState] as const;
+}
 
-  const [saveMenuItem] = useSaveMenuItemMutation();
-  const [deleteMenuItem] = useDeleteMenuItemMutation();
+function ItemsTab() {
+  const can = useCan();
+  const { data: menu } = useMenuQuery();
+  const [q, setQ] = useState('');
+  const [editing, setEditing] = useState<MenuItem | null | 'new'>(null);
+  const [setStock] = useSetStockMutation();
+  const [del] = useDeleteItemMutation();
+  const [confirm, ask] = useConfirm();
 
-  // Filter items based on search and category
-  const filteredItems = allMenuItems.filter(item => {
-    // Filter by category first (subcategory removed)
-    if (selectedCategory !== null) {
-      if (item.categoryId !== selectedCategory) return false;
-    }
-    
-    // Filter by search query
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      const matchesSearch = item.foodName.toLowerCase().includes(query) ||
-                           item.description.toLowerCase().includes(query);
-      if (!matchesSearch) return false;
-    }
-    
-    // Filter sold out items
-    if (!showSoldOut && item.soldOut) return false;
-    
-    return true;
-  });
+  const sections = useMemo(() => {
+    if (!menu) return [];
+    const term = q.trim().toLowerCase();
+    return menu.categories.map((c) => ({
+      ...c,
+      items: menu.items.filter((i) => i.categoryId === c.id && (!term || i.name.toLowerCase().includes(term))),
+    })).filter((s) => s.items.length || !term);
+  }, [menu, q]);
 
-  const totalPages = Math.ceil(filteredItems.length / PAGE_SIZE);
-  const paginatedItems = filteredItems.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
-
-  const getCategoryName = (categoryId: number) => {
-    return categories.find(cat => cat.categoryId === categoryId)?.categoryName || 'Unknown';
-  };
-
-  // getSubCategoryName - COMMENTED OUT (not used in project)
-  // const getSubCategoryName = (subCategoryId: number) => {
-  //   return subCategories.find(sub => sub.subCategoryId === subCategoryId)?.subCategoryName || 'Unknown';
-  // };
-
-  const handleToggleVisibility = async (item: ApiMenuItem) => {
-    try {
-      await saveMenuItem({
-        ...item,
-        soldOut: !item.soldOut,
-      }).unwrap();
-      toast.success(item.soldOut ? 'Marked as available' : 'Marked as sold out');
-    } catch (err: any) {
-      toast.error(err?.data?.message || err?.message || 'Failed to update item');
-    }
-  };
-
-  const handleEditItem = (itemId: number) => {
-    const item = allMenuItems.find(i => i.itemId === itemId);
-    if (item) {
-      const convertedItem: any = {
-        ...item,
-        images: item.images || [],
-        portionSize: item.weight || '',
-        preparationTime: item.approxTime || '',
-        popular: item.isPopular || false,
-        new: item.isNewItem || false,
-        chefRecommended: item.isChefsChoice || false,
-        dietaryInfo: {
-          vegetarian: item.isVeg || false,
-          vegan: false,
-          glutenFree: false,
-          dairyFree: false,
-          spicy: false,
-        },
-        tags: [],
-        ingredients: [],
-        allergens: [],
-        nutritionalInfo: { calories: 0, protein: 0, carbs: 0, fat: 0 },
-      };
-      setEditingItem(convertedItem);
-    }
-  };
-
-  const handleSaveItem = () => {
-    setEditingItem(null);
-    refetchItems();
-  };
-
-  const handleDeleteItem = (item: ApiMenuItem) => {
-    setPendingDeleteItem(item);
-  };
-
-  const confirmDelete = async () => {
-    if (!pendingDeleteItem) return;
-    try {
-      await deleteMenuItem(pendingDeleteItem.itemId).unwrap();
-      toast.success(`"${pendingDeleteItem.foodName}" deleted`);
-    } catch (err: any) {
-      toast.error(err?.data?.message || err?.message || 'Failed to delete item');
-    } finally {
-      setPendingDeleteItem(null);
-    }
-  };
-
-  const handleAddNewItem = () => {
-    setIsAddItemModalOpen(true);
-  };
-
-  const handleAddNewCategory = () => {
-    setIsAddCategoryModalOpen(true);
-  };
-
-  const handleSaveNewItem = () => {
-    refetchItems();
-  };
-
-  const handleSaveNewCategory = (category: any) => {
-    // The AddCategoryModal already calls addCategory, so we just need to show success
-    toast.success(`Successfully added category!`);
-    refetchItems();
-  };
-
-
+  if (!menu) return null;
 
   return (
-    <div className="space-y-6">
-      {/* Header Actions */}
-      <div className="flex flex-col gap-3">
-
-        {/* Row 1: Search — full width */}
-        <div className="relative w-full">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4 z-10 pointer-events-none" />
-          <Input
-            placeholder="Search menu items..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-10 w-full"
-          />
+    <div className="space-y-4">
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+          <Input placeholder="Search items" className="pl-10 bg-white" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
-
-        {/* Row 2: Category filter + Sold Out toggle */}
-        <div className="flex gap-2">
-          <Select
-            value={selectedCategory?.toString() || 'all'}
-            onValueChange={(val) => setSelectedCategory(val === 'all' ? null : Number(val))}
-          >
-            <SelectTrigger className="flex-1">
-              <SelectValue placeholder="All Categories" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Categories</SelectItem>
-              {categories.filter(cat => cat?.categoryId != null).map(cat => (
-                <SelectItem key={cat.categoryId} value={cat.categoryId?.toString()}>
-                  {cat.categoryName}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          <Button
-            variant={showSoldOut ? "default" : "outline"}
-            size="sm"
-            onClick={() => setShowSoldOut(!showSoldOut)}
-            className="flex items-center gap-2 h-10 whitespace-nowrap flex-shrink-0"
-          >
-            {showSoldOut ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
-            <span className="hidden sm:inline">Sold Out Items</span>
-            <span className="sm:hidden">Sold Out</span>
-          </Button>
-        </div>
-
-        {/* Row 3: Add buttons — full width on mobile */}
-        <div className="flex gap-2">
-          <Button
-            className="flex-1 flex items-center justify-center gap-2"
-            onClick={handleAddNewItem}
-          >
-            <Plus className="h-4 w-4" />
-            Add New Item
-          </Button>
-
-          <Button
-            variant="outline"
-            className="flex-1 flex items-center justify-center gap-2"
-            onClick={handleAddNewCategory}
-          >
-            <Plus className="h-4 w-4" />
-            Add Category
-          </Button>
-        </div>
-
+        {can('menu.edit') && <Button onClick={() => setEditing('new')} disabled={!menu.categories.length}><Plus className="h-4 w-4 mr-1" /> Item</Button>}
       </div>
+      {!menu.categories.length && <Card className="p-6 text-center text-gray-600">Add a category first (Categories tab).</Card>}
 
-      {/* Stats Cards */}
-      {isLoadingItems ? (
-        <div className="flex items-center justify-center py-8">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-        </div>
-      ) : (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+      {sections.map((s) => (
+        <section key={s.id}>
+          <h3 className="font-semibold text-gray-700 mb-2 flex items-center gap-2">{s.name} <Badge variant="secondary">{s.items.length}</Badge>{!s.isActive && <Badge variant="outline">Hidden</Badge>}</h3>
           <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2">
-                <div className="p-2 bg-blue-100 rounded-lg">
-                  <Eye className="h-4 w-4 text-blue-600" />
+            <CardContent className="p-0 divide-y">
+              {s.items.map((i) => (
+                <div key={i.id} className={`flex items-center gap-3 p-3 ${!i.isActive ? 'opacity-50' : ''}`}>
+                  {i.images.find((x) => x.isPrimary) ? (
+                    <img src={i.images.find((x) => x.isPrimary)!.url} alt="" className="h-12 w-12 rounded-md object-cover" />
+                  ) : <div className="h-12 w-12 rounded-md bg-gray-100" />}
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium flex items-center gap-2"><FoodTypeMark type={i.foodType} size={12} /> <span className="truncate">{i.name}</span></p>
+                    <p className="text-sm text-gray-600">
+                      {i.variants.length ? i.variants.map((v) => `${v.name} ${formatMoney(v.price)}`).join(' · ') : formatMoney(i.price)}
+                    </p>
+                  </div>
+                  <label className="flex items-center gap-2 text-xs text-gray-600" title="In stock">
+                    <Switch checked={i.inStock} onCheckedChange={(v) => setStock({ id: i.id, inStock: v })} />
+                    <span className="hidden sm:inline">{i.inStock ? 'In stock' : 'Sold out'}</span>
+                  </label>
+                  {can('menu.edit') && (
+                    <>
+                      <Button size="icon" variant="ghost" onClick={() => setEditing(i)}><Edit className="h-4 w-4" /></Button>
+                      <Button size="icon" variant="ghost" className="text-gray-400 hover:text-red-600"
+                        onClick={() => ask({ title: `Delete ${i.name}?`, body: 'It disappears from the menu. Past bills keep it.', run: () => del(i.id).unwrap() })}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </>
+                  )}
                 </div>
-                <div>
-                  <p className="text-sm text-gray-600">Total Items</p>
-                  <p className="text-xl font-semibold">{allMenuItems.length}</p>
-                </div>
-              </div>
+              ))}
+              {!s.items.length && <p className="p-3 text-sm text-gray-500">No items</p>}
             </CardContent>
           </Card>
+        </section>
+      ))}
 
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2">
-                <div className="p-2 bg-green-100 rounded-lg">
-                  <Star className="h-4 w-4 text-green-600" />
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600">Popular</p>
-                  <p className="text-xl font-semibold">
-                    {allMenuItems.filter(item => item.isPopular).length}
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+      <ItemFormDialog open={editing !== null} item={editing === 'new' ? null : editing} menu={menu} onClose={() => setEditing(null)} />
+      {confirm}
+    </div>
+  );
+}
 
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2">
-                <div className="p-2 bg-red-100 rounded-lg">
-                  <EyeOff className="h-4 w-4 text-red-600" />
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600">Sold Out</p>
-                  <p className="text-xl font-semibold">
-                    {allMenuItems.filter(item => item.soldOut).length}
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+function CategoriesTab() {
+  const can = useCan();
+  const { data: menu } = useMenuQuery();
+  const [name, setName] = useState('');
+  const [create] = useCreateCategoryMutation();
+  const [update] = useUpdateCategoryMutation();
+  const [del] = useDeleteCategoryMutation();
+  const [reorder] = useReorderCategoriesMutation();
+  const [confirm, ask] = useConfirm();
+  if (!menu) return null;
+  const cats = menu.categories;
 
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2">
-                <div className="p-2 bg-purple-100 rounded-lg">
-                  <Clock className="h-4 w-4 text-purple-600" />
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600">New Items</p>
-                  <p className="text-xl font-semibold">
-                    {allMenuItems.filter(item => item.isNewItem).length}
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+  const move = (i: number, d: -1 | 1) => {
+    const ids = cats.map((c) => c.id);
+    [ids[i], ids[i + d]] = [ids[i + d], ids[i]];
+    reorder(ids).unwrap().catch(toastError);
+  };
+
+  return (
+    <div className="space-y-3 max-w-2xl">
+      {can('menu.edit') && (
+        <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); if (name.trim()) create({ name: name.trim(), sortOrder: cats.length }).unwrap().then(() => setName('')).catch(toastError); }}>
+          <Input placeholder="New category (e.g. Starters)" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} className="bg-white" />
+          <Button type="submit"><Plus className="h-4 w-4 mr-1" /> Add</Button>
+        </form>
       )}
-
-      {/* Menu Items Table */}
       <Card>
-        <CardHeader>
-          <CardTitle>Menu Items ({filteredItems.length})</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {/* Table Container */}
-          <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden shadow-sm">
-            {isLoadingItems ? (
-              <div className="p-4 space-y-4">
-                {[...Array(6)].map((_, i) => (
-                  <MenuManagementSkeleton key={i} />
-                ))}
-              </div>
-            ) : filteredItems.length === 0 ? (
-            <div className="text-center py-12">
-              <div className="text-gray-400 mb-4">
-                <Search className="h-12 w-12 mx-auto" />
-              </div>
-              <h3 className="text-lg font-medium text-gray-900 mb-2">No items found</h3>
-              <p className="text-gray-500">
-                Try adjusting your search or filter criteria
-              </p>
+        <CardContent className="p-0 divide-y">
+          {cats.map((c, i) => (
+            <div key={c.id} className="flex items-center gap-2 p-3">
+              <Input
+                defaultValue={c.name}
+                disabled={!can('menu.edit')}
+                className="border-transparent shadow-none focus-visible:border-input"
+                onBlur={(e) => e.target.value.trim() && e.target.value !== c.name && update({ id: c.id, name: e.target.value.trim() }).unwrap().catch(toastError)}
+              />
+              <span className="text-xs text-gray-500 whitespace-nowrap">{menu.items.filter((x) => x.categoryId === c.id).length} items</span>
+              {can('menu.edit') && (
+                <>
+                  <Switch checked={c.isActive} onCheckedChange={(v) => update({ id: c.id, isActive: v })} title="Show on menu" />
+                  <Button size="icon" variant="ghost" disabled={i === 0} onClick={() => move(i, -1)}><ArrowUp className="h-4 w-4" /></Button>
+                  <Button size="icon" variant="ghost" disabled={i === cats.length - 1} onClick={() => move(i, 1)}><ArrowDown className="h-4 w-4" /></Button>
+                  <Button size="icon" variant="ghost" className="text-gray-400 hover:text-red-600"
+                    onClick={() => ask({ title: `Delete ${c.name}?`, body: 'Only empty categories can be deleted.', run: () => del(c.id).unwrap() })}>
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </>
+              )}
             </div>
-          ) : (
-            <div className="space-y-4">
-              {paginatedItems.map((item, index) => {
-                const category = categories.find(cat => cat.categoryId === item.categoryId);
-                // subCategory removed - not used in project
-
-                return (
-                  <motion.div
-                    key={item.itemId}
-                    initial={{ y: 20, opacity: 0 }}
-                    animate={{ y: 0, opacity: 1 }}
-                    transition={{ duration: 0.3, delay: index * 0.02 }}
-                    onClick={() => handleEditItem(item.itemId)}
-                    className={`p-4 border rounded-lg hover:shadow-md transition-all cursor-pointer hover:border-accent/40 ${
-                      item.soldOut ? 'bg-gray-50 border-gray-200' : 'bg-white border-gray-200'
-                    }`}
-                  >
-                    <div className="flex items-center gap-4">
-                      {/* Item Image */}
-                      <div className="w-12 h-12 sm:w-16 sm:h-16 bg-gray-200 rounded-lg overflow-hidden flex-shrink-0">
-                        <img
-                          src={item.images?.find(i => i.isPrimary)?.imageUrl || item.images?.[0]?.imageUrl || '/placeholder.svg'}
-                          alt={item.foodName}
-                          className="w-full h-full object-cover"
-                        />
-                      </div>
-
-                      {/* Item Details */}
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-start justify-between">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-1">
-                              <h3 className={`font-semibold ${item.soldOut ? 'text-gray-500' : 'text-gray-900'}`}>
-                                {item.foodName}
-                              </h3>
-                              <div className="flex gap-1">
-                                {item.isPopular && (
-                                  <Badge variant="secondary" className="text-xs">
-                                    Popular
-                                  </Badge>
-                                )}
-                                {item.isNewItem && (
-                                  <Badge variant="outline" className="text-xs">
-                                    New
-                                  </Badge>
-                                )}
-                                {item.isChefsChoice && (
-                                  <Badge variant="default" className="text-xs">
-                                    Chef's Choice
-                                  </Badge>
-                                )}
-                                {item.soldOut && (
-                                  <Badge variant="destructive" className="text-xs">
-                                    Sold Out
-                                  </Badge>
-                                )}
-                                {item.isVeg && (
-                                  <Badge variant="outline" className="text-xs bg-green-50">
-                                    Vegetarian
-                                  </Badge>
-                                )}
-                              </div>
-                            </div>
-                            <p className={`text-sm mb-2 ${item.soldOut ? 'text-gray-400' : 'text-gray-600'}`}>
-                              {item.description}
-                            </p>
-                            <div className="flex items-center gap-4 text-xs text-gray-500">
-                              <span>{category?.categoryName}</span>
-                              {item.approxTime && (
-                                <span className="flex items-center gap-1">
-                                  <Clock className="h-3 w-3" />
-                                  {item.approxTime}
-                                </span>
-                              )}
-                              {item.weight && (
-                                <span>{item.weight}</span>
-                              )}
-                            </div>
-                          </div>
-
-                          {/* Price and Actions */}
-                          <div className="flex items-center gap-4 ml-4">
-                            <div className="text-right">
-                              <p className={`text-lg font-semibold ${item.soldOut ? 'text-gray-500' : 'text-gray-900'}`}>
-                                ${item.price.toFixed(2)}
-                              </p>
-                              {/* originalPrice removed - not in API response */}
-                            </div>
-
-                            {/* Actions Menu */}
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-8 w-8 p-0"
-                                  onClick={(e) => e.stopPropagation()}
-                                >
-                                  <MoreVertical className="h-4 w-4" />
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                <DropdownMenuItem onClick={() => handleEditItem(item.itemId)}>
-                                  <Edit className="h-4 w-4 mr-2" />
-                                  Edit Item
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => handleToggleVisibility(item)}>
-                                  {item.soldOut ? (
-                                    <>
-                                      <Eye className="h-4 w-4 mr-2" />
-                                      Mark Available
-                                    </>
-                                  ) : (
-                                    <>
-                                      <EyeOff className="h-4 w-4 mr-2" />
-                                      Mark Sold Out
-                                    </>
-                                  )}
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  onClick={() => handleDeleteItem(item)}
-                                  className="text-red-600"
-                                >
-                                  <Trash2 className="h-4 w-4 mr-2" />
-                                  Delete Item
-                                </DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </motion.div>
-                );
-              })}
-              </div>
-            )}
-
-            {/* Pagination */}
-            {totalPages > 1 && (
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-4 border-t border-gray-100">
-                <p className="text-sm text-gray-500">
-                  Showing {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, filteredItems.length)} of {filteredItems.length} items
-                </p>
-                <div className="flex items-center gap-1">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                    disabled={currentPage === 1}
-                    className="h-8 w-8 p-0"
-                  >
-                    ‹
-                  </Button>
-                  {Array.from({ length: totalPages }, (_, i) => i + 1)
-                    .filter(p => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1)
-                    .reduce<(number | '...')[]>((acc, p, i, arr) => {
-                      if (i > 0 && (p as number) - (arr[i - 1] as number) > 1) acc.push('...');
-                      acc.push(p);
-                      return acc;
-                    }, [])
-                    .map((p, i) =>
-                      p === '...' ? (
-                        <span key={`ellipsis-${i}`} className="px-1 text-gray-400 text-sm">…</span>
-                      ) : (
-                        <Button
-                          key={p}
-                          variant={currentPage === p ? 'default' : 'outline'}
-                          size="sm"
-                          onClick={() => setCurrentPage(p as number)}
-                          className="h-8 w-8 p-0 text-xs"
-                        >
-                          {p}
-                        </Button>
-                      )
-                    )}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                    disabled={currentPage === totalPages}
-                    className="h-8 w-8 p-0"
-                  >
-                    ›
-                  </Button>
-                </div>
-              </div>
-            )}
-          </div>
+          ))}
+          {!cats.length && <p className="p-4 text-sm text-gray-500">No categories yet</p>}
         </CardContent>
       </Card>
+      {confirm}
+    </div>
+  );
+}
 
-      {/* Edit Item Modal */}
-      <EditItemModal
-        isOpen={!!editingItem}
-        onClose={() => setEditingItem(null)}
-        item={editingItem}
-        onSave={handleSaveItem}
-      />
+type AddonDraft = { id?: string; name: string; price: string };
 
-      {/* Add Item Modal */}
-      <AddItemModal
-        isOpen={isAddItemModalOpen}
-        onClose={() => setIsAddItemModalOpen(false)}
-        onSave={handleSaveNewItem}
-      />
+function AddonsTab() {
+  const can = useCan();
+  const { data: menu } = useMenuQuery();
+  const [editing, setEditing] = useState<AddonGroup | 'new' | null>(null);
+  const [form, setForm] = useState<{ name: string; min: string; max: string; addons: AddonDraft[] }>({ name: '', min: '0', max: '1', addons: [] });
+  const [create] = useCreateAddonGroupMutation();
+  const [update] = useUpdateAddonGroupMutation();
+  const [del] = useDeleteAddonGroupMutation();
+  const [confirm, ask] = useConfirm();
 
-      {/* Add Category Modal */}
-      <AddCategoryModal
-        isOpen={isAddCategoryModalOpen}
-        onClose={() => setIsAddCategoryModalOpen(false)}
-        onSave={handleSaveNewCategory}
-      />
+  const open = (g: AddonGroup | 'new') => {
+    setEditing(g);
+    setForm(g === 'new'
+      ? { name: '', min: '0', max: '1', addons: [{ name: '', price: '' }] }
+      : { name: g.name, min: String(g.min), max: String(g.max), addons: g.addons.map((a) => ({ id: a.id, name: a.name, price: toRupees(a.price) })) });
+  };
 
-      {/* Delete Confirmation Dialog */}
-      <Dialog open={!!pendingDeleteItem} onOpenChange={() => setPendingDeleteItem(null)}>
-        <DialogContent className="max-w-md p-0 overflow-hidden rounded-2xl border-none shadow-2xl">
-          <div className="bg-red-50 p-6 flex items-center gap-4 border-b border-red-100">
-            <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center flex-shrink-0">
-              <Trash2 className="h-6 w-6 text-red-600" />
-            </div>
+  const save = async () => {
+    const body: AddonGroupInput = {
+      name: form.name.trim(),
+      min: Number(form.min) || 0,
+      max: Math.max(1, Number(form.max) || 1),
+      addons: form.addons.filter((a) => a.name.trim()).map((a) => ({ ...(a.id && { id: a.id }), name: a.name.trim(), price: toPaise(a.price || '0') })),
+    };
+    try {
+      if (editing === 'new') await create(body).unwrap();
+      else if (editing) await update({ id: editing.id, ...body }).unwrap();
+      setEditing(null);
+      toast.success('Saved');
+    } catch (e) { toastError(e); }
+  };
+
+  if (!menu) return null;
+  return (
+    <div className="space-y-3 max-w-2xl">
+      {can('menu.edit') && <Button onClick={() => open('new')}><Plus className="h-4 w-4 mr-1" /> Add-on group</Button>}
+      <p className="text-sm text-gray-500">Groups like "Extra toppings" or "Spice level". Attach them to items from the item form.</p>
+      {menu.addonGroups.map((g) => (
+        <Card key={g.id}>
+          <CardContent className="p-3 flex items-center justify-between gap-2">
             <div>
-              <h3 className="text-lg font-black text-red-900 uppercase tracking-tight">Confirm Deletion</h3>
-              <p className="text-xs font-bold text-red-600/70 uppercase tracking-widest">Safety Check Required</p>
+              <p className="font-medium">{g.name} <span className="text-xs text-gray-500">({g.min === 0 ? 'optional' : `min ${g.min}`}, max {g.max})</span></p>
+              <p className="text-sm text-gray-600">{g.addons.map((a) => `${a.name}${a.price ? ` +${formatMoney(a.price)}` : ''}`).join(' · ')}</p>
             </div>
-          </div>
-          
-          <div className="p-8 space-y-4">
-            <p className="text-gray-600 leading-relaxed">
-              Are you sure you want to permanently delete <span className="font-black text-gray-900">"{pendingDeleteItem?.foodName}"</span>? 
-              This action cannot be undone and the item will be removed from all customer menus immediately.
-            </p>
-          </div>
+            {can('menu.edit') && (
+              <div className="flex">
+                <Button size="icon" variant="ghost" onClick={() => open(g)}><Edit className="h-4 w-4" /></Button>
+                <Button size="icon" variant="ghost" className="text-gray-400 hover:text-red-600" onClick={() => ask({ title: `Delete ${g.name}?`, body: 'It is removed from every item.', run: () => del(g.id).unwrap() })}><Trash2 className="h-4 w-4" /></Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      ))}
 
-          <div className="p-6 bg-gray-50 flex gap-3 justify-end">
-            <Button 
-              variant="ghost" 
-              onClick={() => setPendingDeleteItem(null)}
-              className="font-bold text-gray-500 hover:bg-gray-200"
-            >
-              Keep Item
-            </Button>
-            <Button 
-              variant="destructive" 
-              onClick={confirmDelete}
-              className="bg-red-600 hover:bg-red-700 font-black uppercase tracking-widest px-8 shadow-lg shadow-red-200"
-            >
-              Delete Permanently
-            </Button>
+      <Dialog open={editing !== null} onOpenChange={(o) => !o && setEditing(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>{editing === 'new' ? 'New add-on group' : 'Edit add-on group'}</DialogTitle></DialogHeader>
+          <div className="grid grid-cols-3 gap-2">
+            <div className="col-span-3"><Label>Name</Label><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Extra toppings" /></div>
+            <div><Label>Min pick</Label><Input inputMode="numeric" value={form.min} onChange={(e) => setForm({ ...form, min: e.target.value.replace(/\D/g, '') })} /></div>
+            <div><Label>Max pick</Label><Input inputMode="numeric" value={form.max} onChange={(e) => setForm({ ...form, max: e.target.value.replace(/\D/g, '') })} /></div>
           </div>
+          <div className="space-y-2">
+            {form.addons.map((a, i) => (
+              <div key={i} className="flex gap-2">
+                <Input placeholder="Cheese" value={a.name} onChange={(e) => setForm({ ...form, addons: form.addons.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)) })} />
+                <Input placeholder="₹" inputMode="decimal" className="w-24" value={a.price} onChange={(e) => setForm({ ...form, addons: form.addons.map((x, j) => (j === i ? { ...x, price: e.target.value } : x)) })} />
+                <Button size="icon" variant="ghost" onClick={() => setForm({ ...form, addons: form.addons.filter((_, j) => j !== i) })}><X className="h-4 w-4" /></Button>
+              </div>
+            ))}
+            <Button size="sm" variant="ghost" onClick={() => setForm({ ...form, addons: [...form.addons, { name: '', price: '' }] })}><Plus className="h-4 w-4 mr-1" /> Option</Button>
+          </div>
+          <DialogFooter><Button onClick={save} disabled={!form.name.trim() || !form.addons.some((a) => a.name.trim())}>Save</Button></DialogFooter>
         </DialogContent>
       </Dialog>
+      {confirm}
     </div>
+  );
+}
+
+function StationsTab() {
+  const can = useCan();
+  const { data: menu } = useMenuQuery();
+  const [name, setName] = useState('');
+  const [create] = useCreateStationMutation();
+  const [update] = useUpdateStationMutation();
+  const [del] = useDeleteStationMutation();
+  if (!menu) return null;
+  const edit = can('settings.edit');
+  return (
+    <div className="space-y-3 max-w-xl">
+      <p className="text-sm text-gray-500">Each station gets its own KOT, so the tandoor only sees tandoor items. Items without a station go to the main kitchen.</p>
+      {edit && (
+        <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); if (name.trim()) create({ name: name.trim() }).unwrap().then(() => setName('')).catch(toastError); }}>
+          <Input placeholder="Tandoor, Bar, Chinese…" value={name} onChange={(e) => setName(e.target.value)} className="bg-white" />
+          <Button type="submit"><Plus className="h-4 w-4 mr-1" /> Add</Button>
+        </form>
+      )}
+      <Card>
+        <CardContent className="p-0 divide-y">
+          {menu.stations.map((s) => (
+            <div key={s.id} className="flex items-center gap-2 p-3">
+              <Input defaultValue={s.name} disabled={!edit} className="border-transparent shadow-none"
+                onBlur={(e) => e.target.value.trim() && e.target.value !== s.name && update({ id: s.id, name: e.target.value.trim() }).unwrap().catch(toastError)} />
+              <span className="text-xs text-gray-500 whitespace-nowrap">{menu.items.filter((i) => i.stationId === s.id).length} items</span>
+              {edit && <Button size="icon" variant="ghost" className="text-gray-400 hover:text-red-600" onClick={() => del(s.id).unwrap().catch(toastError)}><Trash2 className="h-4 w-4" /></Button>}
+            </div>
+          ))}
+          {!menu.stations.length && <p className="p-4 text-sm text-gray-500">No stations: everything goes to one kitchen.</p>}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+export const MenuManagement: React.FC = () => {
+  const { isLoading } = useMenuQuery();
+  if (isLoading) return <Loader2 className="h-8 w-8 animate-spin mx-auto mt-20 text-gray-400" />;
+  return (
+    <Tabs defaultValue="items">
+      <TabsList className="mb-4">
+        <TabsTrigger value="items">Items</TabsTrigger>
+        <TabsTrigger value="categories">Categories</TabsTrigger>
+        <TabsTrigger value="addons">Add-ons</TabsTrigger>
+        <TabsTrigger value="stations">Kitchen stations</TabsTrigger>
+      </TabsList>
+      <TabsContent value="items"><ItemsTab /></TabsContent>
+      <TabsContent value="categories"><CategoriesTab /></TabsContent>
+      <TabsContent value="addons"><AddonsTab /></TabsContent>
+      <TabsContent value="stations"><StationsTab /></TabsContent>
+    </Tabs>
   );
 };

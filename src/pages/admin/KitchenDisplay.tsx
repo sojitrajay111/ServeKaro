@@ -1,346 +1,134 @@
-import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { ChefHat, Clock, Printer, Check, UtensilsCrossed, ShoppingBag, Flame } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Clock, Loader2, Printer } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
+import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { useOrders, TableOrder } from '@/contexts/OrdersContext';
-import { useRestaurant } from '@/contexts/RestaurantContext';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { useKotsQuery, useReprintKotMutation, useUpdateKotMutation } from '@/store/endpoints/orders';
+import { useMenuQuery } from '@/store/endpoints/menu';
+import { useStationRoom } from '@/hooks/useRealtime';
+import { toastError } from '@/lib/apiError';
+import { printKot } from '@/lib/print';
+import type { Kot, KotStatus } from '@/types/api';
 
-const getElapsedLabel = (createdAt: string) => {
-  const seconds = Math.floor((Date.now() - new Date(createdAt).getTime()) / 1000);
-  if (seconds < 60) return `${seconds}s ago`;
-  return `${Math.floor(seconds / 60)}m ago`;
+const NEXT: Partial<Record<KotStatus, { to: KotStatus; label: string }>> = {
+  pending: { to: 'preparing', label: 'Start' },
+  preparing: { to: 'ready', label: 'Ready' },
+  ready: { to: 'served', label: 'Served' },
 };
 
-const getElapsedMinutes = (createdAt: string) =>
-  Math.floor((Date.now() - new Date(createdAt).getTime()) / 60000);
+const COLUMNS: { status: KotStatus; title: string; tone: string }[] = [
+  { status: 'pending', title: 'New', tone: 'border-t-red-500' },
+  { status: 'preparing', title: 'Cooking', tone: 'border-t-amber-500' },
+  { status: 'ready', title: 'Ready to serve', tone: 'border-t-green-500' },
+];
 
-const printKOT = (order: TableOrder, restaurantName: string) => {
-  const kotNumber = `KOT-${Date.now().toString().slice(-4)}`;
+const STATION_KEY = 'sk.kitchenStation';
 
-  const html = `<!DOCTYPE html>
-<html>
-<head>
-  <title>KOT - Table ${order.tableNumber}</title>
-  <style>
-    body { font-family: 'Courier New', monospace; max-width: 280px; margin: 0 auto; padding: 12px; }
-    h2 { text-align: center; margin: 0 0 4px; font-size: 22px; letter-spacing: 3px; }
-    .center { text-align: center; }
-    .row { display: flex; justify-content: space-between; margin: 4px 0; font-size: 13px; }
-    .divider { border-top: 2px dashed #000; margin: 8px 0; }
-    .item-line { display: flex; align-items: baseline; margin: 8px 0 2px; }
-    .item-qty { font-size: 20px; font-weight: 900; min-width: 28px; }
-    .item-name { font-weight: bold; font-size: 16px; }
-    .note { font-size: 11px; color: #555; margin-left: 28px; font-style: italic; }
-    .footer { text-align: center; font-size: 11px; margin-top: 8px; letter-spacing: 2px; }
-    @media print { body { margin: 0; } }
-  </style>
-</head>
-<body>
-  <h2>KOT</h2>
-  <p class="center" style="margin:0;font-size:11px">${restaurantName}</p>
-  <div class="divider"></div>
-  <div class="row">
-    <span><b>Table: ${order.tableNumber}</b></span>
-    <span>${kotNumber}</span>
-  </div>
-  <div class="row">
-    <span>${new Date(order.createdAt).toLocaleTimeString()}</span>
-    <span>${new Date(order.createdAt).toLocaleDateString()}</span>
-  </div>
-  <div class="divider"></div>
-  ${order.items
-    .map(
-      (item) => `
-    <div class="item-line">
-      <span class="item-qty">${item.quantity}×</span>
-      <span class="item-name">${item.foodName}</span>
-    </div>
-    ${item.notes ? `<div class="note">★ ${item.notes}</div>` : ''}
-  `
-    )
-    .join('')}
-  <div class="divider"></div>
-  <p class="footer">** KITCHEN COPY **</p>
-</body>
-</html>`;
-
-  const win = window.open('', '_blank', 'width=350,height=520');
-  if (win) {
-    win.document.write(html);
-    win.document.close();
-    win.print();
-  }
-};
-
-interface OrderCardProps {
-  order: TableOrder;
-  onAction: () => void;
-  actionLabel: string;
-  stripColor: string;
-  buttonClass: string;
-  restaurantName: string;
+// Re-render every 30s so the "x min" timers stay current.
+function useTick(ms = 30_000) {
+  const [, set] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => set((n) => n + 1), ms);
+    return () => clearInterval(t);
+  }, [ms]);
 }
 
-const OrderCard = ({
-  order,
-  onAction,
-  actionLabel,
-  stripColor,
-  buttonClass,
-  restaurantName,
-}: OrderCardProps) => {
-  const elapsed = getElapsedMinutes(order.createdAt);
-  const isUrgent = elapsed >= 15;
+const age = (iso: string) => Math.round((Date.now() - new Date(iso).getTime()) / 60000);
 
-  return (
-    <motion.div
-      layout
-      initial={{ opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, scale: 0.95 }}
-      transition={{ duration: 0.2 }}
-    >
-      <Card>
-        <CardContent className="p-0">
-          <div className="flex">
-            {/* Colored left strip — rendered as a plain div so glass-card doesn't affect it */}
-            <div className={`w-1 rounded-l-xl flex-shrink-0 ${stripColor}`} />
-
-            <div className="flex-1 p-4 space-y-3">
-              {/* Header row */}
-              <div className="flex items-center justify-between">
-                <h3 className="text-base font-bold text-gray-900">Table {order.tableNumber}</h3>
-                <div className="flex items-center gap-2">
-                  {isUrgent && (
-                    <Badge className="bg-red-100 text-red-700 border border-red-200 text-xs gap-1">
-                      <Flame className="w-3 h-3" /> Urgent
-                    </Badge>
-                  )}
-                  <span className="flex items-center gap-1 text-xs text-gray-400">
-                    <Clock className="w-3 h-3" />
-                    {getElapsedLabel(order.createdAt)}
-                  </span>
-                </div>
-              </div>
-
-              {/* Items */}
-              <div className="divide-y divide-gray-100">
-                {order.items.map((item, i) => (
-                  <div key={i} className="flex items-center justify-between py-2 first:pt-0 last:pb-0">
-                    <div className="flex items-center gap-3">
-                      <span className="text-sm font-bold text-orange-600 w-6 text-center">
-                        {item.quantity}×
-                      </span>
-                      <span className="text-sm font-medium text-gray-900">{item.foodName}</span>
-                    </div>
-                    {item.notes && (
-                      <span className="text-xs text-orange-500 italic truncate max-w-[100px]">
-                        {item.notes}
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-
-              {/* Actions */}
-              <div className="flex gap-2 pt-1 border-t border-gray-100">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="flex-shrink-0"
-                  onClick={() => printKOT(order, restaurantName)}
-                  title="Print KOT"
-                >
-                  <Printer className="w-4 h-4" />
-                </Button>
-                <Button size="sm" className={`flex-1 ${buttonClass}`} onClick={onAction}>
-                  <Check className="w-4 h-4 mr-1" />
-                  {actionLabel}
-                </Button>
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-    </motion.div>
+export const KitchenDisplay: React.FC = () => {
+  useTick();
+  const [station, setStation] = useState<string>(() => {
+    try { return localStorage.getItem(STATION_KEY) || 'all'; } catch { return 'all'; }
+  });
+  const { data: menu } = useMenuQuery();
+  const { data: kots = [], isLoading } = useKotsQuery(
+    { status: ['pending', 'preparing', 'ready'], ...(station !== 'all' && { stationId: station }) },
+    { pollingInterval: 30_000 }, // fallback if the socket drops
   );
-};
+  const [update] = useUpdateKotMutation();
+  const [reprint] = useReprintKotMutation();
+  useStationRoom(station === 'all' ? null : station);
 
-export const KitchenDisplay = () => {
-  const { activeOrders, updateOrderStatus } = useOrders();
-  const { currentRestaurant } = useRestaurant();
-  const [, setTick] = useState(0);
+  const stations = menu?.stations ?? [];
+  const stationName = (id: string | null) => stations.find((s) => s.id === id)?.name;
 
-  useEffect(() => {
-    const interval = setInterval(() => setTick((t) => t + 1), 30000);
-    return () => clearInterval(interval);
-  }, []);
+  const pickStation = (v: string) => {
+    setStation(v);
+    try { localStorage.setItem(STATION_KEY, v); } catch { /* ignore */ }
+  };
 
-  const restaurantName = currentRestaurant?.name || 'Restaurant';
-  const pendingOrders = Array.from(activeOrders.values()).filter((o) => o.status === 'pending');
-  const preparingOrders = Array.from(activeOrders.values()).filter((o) => o.status === 'preparing');
-  const totalActive = pendingOrders.length + preparingOrders.length;
+  const advance = (k: Kot) => {
+    const next = NEXT[k.status];
+    if (next) update({ id: k.id, status: next.to }).unwrap().catch(toastError);
+  };
 
-  const stats = [
-    {
-      title: 'New Orders',
-      value: pendingOrders.length,
-      icon: ShoppingBag,
-      color: 'text-orange-600',
-      bg: 'bg-orange-50',
-    },
-    {
-      title: 'Preparing',
-      value: preparingOrders.length,
-      icon: ChefHat,
-      color: 'text-blue-600',
-      bg: 'bg-blue-50',
-    },
-    {
-      title: 'Total Active',
-      value: totalActive,
-      icon: UtensilsCrossed,
-      color: 'text-purple-600',
-      bg: 'bg-purple-50',
-    },
-    {
-      title: 'Urgent (>15m)',
-      value: Array.from(activeOrders.values()).filter(
-        (o) =>
-          (o.status === 'pending' || o.status === 'preparing') &&
-          getElapsedMinutes(o.createdAt) >= 15
-      ).length,
-      icon: Flame,
-      color: 'text-red-600',
-      bg: 'bg-red-50',
-    },
-  ];
+  const doPrint = async (k: Kot) => {
+    try {
+      const fresh = await reprint(k.id).unwrap();
+      printKot(fresh, stationName(fresh.stationId));
+    } catch (e) { toastError(e); }
+  };
 
   return (
-    <div className="space-y-6">
-      {/* Page Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Kitchen Display</h1>
-          <p className="text-sm text-gray-500">
-            Live order queue for {restaurantName} — updates every 30s
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-3 flex-wrap">
-            {[
-              { label: 'New Order', dot: 'bg-orange-500' },
-              { label: 'Preparing', dot: 'bg-blue-500' },
-              { label: 'Urgent (>15m)', dot: 'bg-red-500' },
-            ].map(({ label, dot }) => (
-              <div
-                key={label}
-                className="flex items-center gap-2 px-3 py-1 bg-white border border-gray-200 rounded-md text-xs font-medium text-gray-600"
-              >
-                <div className={`w-2 h-2 rounded-full ${dot}`} />
-                {label}
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2">
+        <Select value={station} onValueChange={pickStation}>
+          <SelectTrigger className="w-56 bg-white"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All stations</SelectItem>
+            {stations.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <span className="text-sm text-gray-500">{kots.length} open KOTs</span>
+      </div>
+
+      {isLoading ? <Loader2 className="h-8 w-8 animate-spin mx-auto mt-16 text-gray-400" /> : (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {COLUMNS.map((col) => {
+            const list = kots.filter((k) => k.status === col.status);
+            return (
+              <div key={col.status} className="space-y-3">
+                <h3 className="font-semibold text-gray-700 flex items-center gap-2">{col.title} <Badge variant="secondary">{list.length}</Badge></h3>
+                {list.map((k) => {
+                  const mins = age(k.createdAt);
+                  const late = k.status !== 'ready' && mins >= 20;
+                  return (
+                    <Card key={k.id} className={`border-t-4 ${col.tone} ${k.type === 'cancel' ? 'bg-red-50 border-red-300' : ''}`}>
+                      <div className="p-3 border-b flex items-center justify-between">
+                        <div>
+                          <p className="font-bold text-lg leading-none">
+                            {k.tableName || (k.orderType === 'takeaway' ? 'Takeaway' : 'Delivery')}
+                            {k.type === 'cancel' && <span className="ml-2 text-red-600 text-sm">CANCEL</span>}
+                          </p>
+                          <p className="text-xs text-gray-500 mt-1">KOT {k.kotNo} · Order #{k.orderNo}{station === 'all' && stationName(k.stationId) ? ` · ${stationName(k.stationId)}` : ''}</p>
+                        </div>
+                        <span className={`text-sm flex items-center gap-1 ${late ? 'text-red-600 font-bold' : 'text-gray-500'}`}><Clock className="h-3.5 w-3.5" />{mins}m</span>
+                      </div>
+                      <ul className="p-3 space-y-1.5">
+                        {k.items.map((i) => (
+                          <li key={i.orderItemId} className={k.type === 'cancel' ? 'line-through text-red-700' : ''}>
+                            <span className="font-bold mr-1">{i.qty}×</span>{i.name}{i.variantName && ` (${i.variantName})`}
+                            {i.addons.length > 0 && <div className="text-xs text-gray-500 ml-5">+ {i.addons.join(', ')}</div>}
+                            {i.note && <div className="text-xs text-amber-700 font-semibold ml-5">» {i.note}</div>}
+                          </li>
+                        ))}
+                      </ul>
+                      <div className="p-3 pt-0 flex gap-2">
+                        <Button size="sm" variant="ghost" onClick={() => doPrint(k)} title="Print"><Printer className="h-4 w-4" /></Button>
+                        {k.type === 'cancel' ? (
+                          <Button size="sm" variant="outline" className="flex-1" onClick={() => update({ id: k.id, status: 'served' }).unwrap().catch(toastError)}>Seen</Button>
+                        ) : NEXT[k.status] && (
+                          <Button size="sm" className="flex-1" onClick={() => advance(k)}>{NEXT[k.status]!.label}</Button>
+                        )}
+                      </div>
+                    </Card>
+                  );
+                })}
+                {!list.length && <p className="text-sm text-gray-400 text-center py-6">Nothing here</p>}
               </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
-        {stats.map((stat, index) => {
-          const Icon = stat.icon;
-          return (
-            <motion.div
-              key={stat.title}
-              initial={{ y: 20, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              transition={{ duration: 0.4, delay: index * 0.08 }}
-            >
-              <Card>
-                <CardContent className="p-5">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-gray-500">{stat.title}</p>
-                      <p className="text-2xl font-bold text-gray-900 mt-1">{stat.value}</p>
-                    </div>
-                    <div className={`p-3 rounded-lg ${stat.bg}`}>
-                      <Icon className={`w-5 h-5 ${stat.color}`} />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </motion.div>
-          );
-        })}
-      </div>
-
-      <div className="h-px bg-gray-200" />
-
-      {totalActive === 0 ? (
-        <Card>
-          <CardContent className="p-6 sm:p-10 lg:p-16 flex flex-col items-center text-center">
-            <UtensilsCrossed className="w-14 h-14 text-gray-300 mb-4" />
-            <h3 className="text-lg font-semibold text-gray-900">Kitchen is clear</h3>
-            <p className="text-sm text-gray-500 mt-1">No pending or in-progress orders</p>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
-          {/* New Orders */}
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <div className="w-2.5 h-2.5 rounded-full bg-orange-500" />
-              <h2 className="text-sm font-bold text-gray-700 uppercase tracking-widest">
-                New Orders ({pendingOrders.length})
-              </h2>
-            </div>
-            <AnimatePresence>
-              {pendingOrders.length === 0 ? (
-                <p className="text-gray-400 text-sm text-center py-10">No new orders</p>
-              ) : (
-                pendingOrders.map((order) => (
-                  <OrderCard
-                    key={order.orderId ? order.orderId.toString() : `${order.tableId}-${order.createdAt}`}
-                    order={order}
-                    onAction={() => updateOrderStatus(order.orderId ? order.orderId.toString() : order.tableId, 'preparing')}
-                    actionLabel="Start Preparing"
-                    stripColor="bg-orange-500"
-                    buttonClass="bg-orange-500 hover:bg-orange-600 text-white"
-                    restaurantName={restaurantName}
-                  />
-                ))
-              )}
-            </AnimatePresence>
-          </div>
-
-          {/* Preparing */}
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <div className="w-2.5 h-2.5 rounded-full bg-blue-500" />
-              <h2 className="text-sm font-bold text-gray-700 uppercase tracking-widest">
-                Preparing ({preparingOrders.length})
-              </h2>
-            </div>
-            <AnimatePresence>
-              {preparingOrders.length === 0 ? (
-                <p className="text-gray-400 text-sm text-center py-10">Nothing in progress</p>
-              ) : (
-                preparingOrders.map((order) => (
-                  <OrderCard
-                    key={order.orderId ? order.orderId.toString() : `${order.tableId}-${order.createdAt}`}
-                    order={order}
-                    onAction={() => updateOrderStatus(order.orderId ? order.orderId.toString() : order.tableId, 'ready')}
-                    actionLabel="Mark Ready"
-                    stripColor="bg-blue-500"
-                    buttonClass="bg-green-600 hover:bg-green-700 text-white"
-                    restaurantName={restaurantName}
-                  />
-                ))
-              )}
-            </AnimatePresence>
-          </div>
+            );
+          })}
         </div>
       )}
     </div>

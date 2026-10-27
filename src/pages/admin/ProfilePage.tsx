@@ -1,227 +1,97 @@
-import React, { useState, useEffect } from 'react';
-import { useAuth } from '@/contexts/AuthContext';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import React, { useEffect, useState } from 'react';
+import { KeyRound, Loader2, Save } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { User, Mail, Shield, KeyRound, CheckCircle } from 'lucide-react';
-import { toast } from 'sonner';
+import { FieldError } from '@/components/AuthShell';
+import { useChangePasswordMutation, useUpdateMeMutation } from '@/store/endpoints/auth';
+import { useAppDispatch, useAppSelector } from '@/store/hooks';
+import { profileLoaded, tokenRefreshed } from '@/store/session';
+import { fieldError, isApiError, toastError } from '@/lib/apiError';
 
 export const ProfilePage: React.FC = () => {
-  const { user, fetchUserProfile, updateUserProfile } = useAuth();
-  const [name, setName] = useState(user?.name || '');
-  const [email, setEmail] = useState(user?.email || '');
-  const [username, setUsername] = useState(user?.username || '');
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const dispatch = useAppDispatch();
+  const profile = useAppSelector((s) => s.session.profile);
+  const [form, setForm] = useState({ name: '', email: '', phone: '' });
+  const [pw, setPw] = useState({ current: '', next: '', confirm: '' });
+  const [error, setError] = useState<unknown>(null);
+  const [pwError, setPwError] = useState<unknown>(null);
+  const [update, updating] = useUpdateMeMutation();
+  const [changePassword, changing] = useChangePasswordMutation();
 
-  // Sync state if user context loads later
   useEffect(() => {
-    if (user) {
-      setName(user.name);
-      setEmail(user.email);
-      setUsername(user.username || '');
-    }
-  }, [user]);
+    if (profile) setForm({ name: profile.user.name, email: profile.user.email ?? '', phone: profile.user.phone ?? '' });
+  }, [profile]);
 
-  // Fetch fresh profile details from backend on mount
-  useEffect(() => {
-    fetchUserProfile();
-  }, []);
+  if (!profile) return null;
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!username.trim()) {
-      toast.error('Username cannot be empty');
-      return;
-    }
-    if (!name.trim()) {
-      toast.error('Name cannot be empty');
-      return;
-    }
-    if (!email.trim()) {
-      toast.error('Email cannot be empty');
-      return;
-    }
-    if (password) {
-      if (password.length < 6) {
-        toast.error('Password must be at least 6 characters long');
-        return;
-      }
-      if (password !== confirmPassword) {
-        toast.error('Passwords do not match');
-        return;
-      }
-    }
-
-    setIsSubmitting(true);
+  const save = async () => {
+    setError(null);
     try {
-      const updateData: { username: string; name: string; email: string; password?: string } = { username, name, email };
-      if (password) {
-        updateData.password = password;
-      }
-      await updateUserProfile(updateData);
-      toast.success('Profile updated successfully');
-      setPassword('');
-      setConfirmPassword('');
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to update profile');
-    } finally {
-      setIsSubmitting(false);
+      const updated = await update({
+        name: form.name.trim(),
+        ...(form.email.trim() && { email: form.email.trim() }),
+        ...(form.phone.trim() && { phone: form.phone.trim() }),
+      }).unwrap();
+      dispatch(profileLoaded(updated));
+      toast.success('Profile saved');
+    } catch (e) {
+      setError(e);
+      if (!isApiError(e) || !e.errors) toastError(e);
+    }
+  };
+
+  const savePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPwError(null);
+    if (pw.next !== pw.confirm) return setPwError({ code: 'X', message: '', errors: { confirm: ['Passwords do not match'] } });
+    try {
+      const { accessToken } = await changePassword({ currentPassword: pw.current, newPassword: pw.next }).unwrap();
+      dispatch(tokenRefreshed(accessToken));
+      setPw({ current: '', next: '', confirm: '' });
+      toast.success('Password changed. Other devices were signed out.');
+    } catch (err) {
+      setPwError(err);
+      if (!isApiError(err) || !err.errors) toastError(err);
     }
   };
 
   return (
-    <div className="max-w-3xl mx-auto space-y-8 py-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-black text-gray-900 uppercase tracking-tight">User Profile</h1>
-        <p className="text-sm text-gray-500">Manage your account information and security credentials</p>
-      </div>
+    <div className="max-w-2xl space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">{profile.user.name} <Badge variant="secondary">{profile.role.name}</Badge></CardTitle>
+          <CardDescription>{profile.outlets.map((o) => o.name).join(', ')}</CardDescription>
+        </CardHeader>
+        <CardContent className="grid sm:grid-cols-2 gap-3">
+          <div className="sm:col-span-2"><Label>Name</Label><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /><FieldError>{fieldError(error, 'name')}</FieldError></div>
+          <div>
+            <Label>Email {profile.user.email && !profile.user.emailVerified && <span className="text-amber-600 text-xs">(not verified)</span>}</Label>
+            <Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+            <FieldError>{fieldError(error, 'email')}</FieldError>
+          </div>
+          <div><Label>Mobile</Label><Input inputMode="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /><FieldError>{fieldError(error, 'phone')}</FieldError></div>
+          <div className="sm:col-span-2 flex items-center justify-between">
+            <span className="text-sm text-gray-500">POS PIN: {profile.user.hasPin ? 'set' : 'not set (ask the owner)'}</span>
+            <Button onClick={save} disabled={updating.isLoading}>{updating.isLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />} Save</Button>
+          </div>
+        </CardContent>
+      </Card>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Sidebar Info Card */}
-        <Card className="md:col-span-1 border-gray-200/60 shadow-sm bg-white rounded-2xl h-fit overflow-hidden">
-          <div className="h-2 bg-gradient-to-r from-accent to-accent/50" />
-          <CardContent className="p-6 flex flex-col items-center text-center space-y-4">
-            <div className="w-20 h-20 bg-gradient-to-br from-accent/20 to-accent rounded-full flex items-center justify-center text-accent-foreground shadow-inner">
-              <span className="text-3xl font-black">
-                {user?.name?.charAt(0).toUpperCase() || 'U'}
-              </span>
-            </div>
-            <div>
-              <h2 className="text-lg font-black text-gray-900 truncate max-w-full">{user?.name || 'Admin User'}</h2>
-              <p className="text-xs text-gray-400 font-mono truncate max-w-full">{user?.email}</p>
-            </div>
-            
-            <div className="pt-2 w-full border-t border-gray-100 flex flex-col items-center space-y-2">
-              <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                <Shield className="w-3.5 h-3.5 text-accent" />
-                <span>Account Role</span>
-              </div>
-              <Badge variant="secondary" className="px-3 py-1 font-bold text-[10px] uppercase tracking-wider bg-accent/10 text-accent hover:bg-accent/15 border-transparent">
-                {user?.role || 'ADMIN'}
-              </Badge>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Edit Form Card */}
-        <Card className="md:col-span-2 border-gray-200/60 shadow-sm bg-white rounded-2xl">
-          <CardHeader>
-            <CardTitle className="text-lg font-bold text-gray-900">Profile Details</CardTitle>
-            <CardDescription className="text-xs">Update your display name, login email and security password.</CardDescription>
-          </CardHeader>
-          <CardContent className="p-6 pt-0">
-            <form onSubmit={handleSubmit} className="space-y-6">
-              {/* Username */}
-              <div className="space-y-2">
-                <Label htmlFor="profile-username" className="text-xs font-bold uppercase tracking-wider text-gray-500">Username</Label>
-                <div className="relative">
-                  <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                  <Input
-                    id="profile-username"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    placeholder="Enter your username"
-                    className="pl-10 h-11 rounded-xl border-gray-200"
-                    required
-                    disabled={isSubmitting}
-                  />
-                </div>
-              </div>
-
-              {/* Name */}
-              <div className="space-y-2">
-                <Label htmlFor="profile-name" className="text-xs font-bold uppercase tracking-wider text-gray-500">Full Name</Label>
-                <div className="relative">
-                  <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                  <Input
-                    id="profile-name"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="Enter your full name"
-                    className="pl-10 h-11 rounded-xl border-gray-200"
-                    required
-                    disabled={isSubmitting}
-                  />
-                </div>
-              </div>
-
-              {/* Email */}
-              <div className="space-y-2">
-                <Label htmlFor="profile-email" className="text-xs font-bold uppercase tracking-wider text-gray-500">Email Address</Label>
-                <div className="relative">
-                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                  <Input
-                    id="profile-email"
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="Enter your email address"
-                    className="pl-10 h-11 rounded-xl border-gray-200"
-                    required
-                    disabled={isSubmitting}
-                  />
-                </div>
-              </div>
-
-              <div className="pt-4 border-t border-gray-100 space-y-4">
-                <div>
-                  <h3 className="text-sm font-bold text-gray-900 flex items-center gap-2">
-                    <KeyRound className="w-4 h-4 text-accent" />
-                    Change Password
-                  </h3>
-                  <p className="text-[11px] text-gray-400 mt-0.5">Leave blank if you don't want to change your password</p>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {/* New Password */}
-                  <div className="space-y-2">
-                    <Label htmlFor="profile-password" className="text-xs font-bold uppercase tracking-wider text-gray-500">New Password</Label>
-                    <Input
-                      id="profile-password"
-                      type="password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder="Min 6 characters"
-                      className="h-11 rounded-xl border-gray-200"
-                      disabled={isSubmitting}
-                    />
-                  </div>
-
-                  {/* Confirm Password */}
-                  <div className="space-y-2">
-                    <Label htmlFor="profile-confirm-password" className="text-xs font-bold uppercase tracking-wider text-gray-500">Confirm Password</Label>
-                    <Input
-                      id="profile-confirm-password"
-                      type="password"
-                      value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
-                      placeholder="Re-enter password"
-                      className="h-11 rounded-xl border-gray-200"
-                      disabled={isSubmitting}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* Submit Button */}
-              <div className="pt-4 border-t border-gray-100 flex justify-end">
-                <Button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="bg-accent hover:bg-accent/90 text-accent-foreground px-8 h-12 rounded-xl font-bold transition-all shadow-md shadow-accent/10"
-                >
-                  {isSubmitting ? 'Saving Changes...' : 'Save Changes'}
-                </Button>
-              </div>
-            </form>
-          </CardContent>
-        </Card>
-      </div>
+      <Card>
+        <CardHeader><CardTitle className="text-base flex items-center gap-2"><KeyRound className="h-4 w-4" /> Change password</CardTitle></CardHeader>
+        <CardContent>
+          <form onSubmit={savePassword} className="grid sm:grid-cols-3 gap-3">
+            <div><Label>Current</Label><Input type="password" autoComplete="current-password" value={pw.current} onChange={(e) => setPw({ ...pw, current: e.target.value })} /><FieldError>{fieldError(pwError, 'currentPassword')}</FieldError></div>
+            <div><Label>New</Label><Input type="password" autoComplete="new-password" value={pw.next} onChange={(e) => setPw({ ...pw, next: e.target.value })} /><FieldError>{fieldError(pwError, 'newPassword')}</FieldError></div>
+            <div><Label>Confirm</Label><Input type="password" autoComplete="new-password" value={pw.confirm} onChange={(e) => setPw({ ...pw, confirm: e.target.value })} /><FieldError>{fieldError(pwError, 'confirm')}</FieldError></div>
+            <div className="sm:col-span-3"><Button type="submit" variant="outline" disabled={changing.isLoading || pw.next.length < 8}>Change password</Button></div>
+          </form>
+        </CardContent>
+      </Card>
     </div>
   );
 };

@@ -1,319 +1,280 @@
-import React, { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { Save, Upload, Palette, DollarSign, MapPin, Loader2, RefreshCw } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import React, { useEffect, useState } from 'react';
+import { Copy, Loader2, Monitor, Plus, Save, Trash2, X } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import { useRestaurant } from '@/contexts/RestaurantContext';
-import { toast } from 'sonner';
-import { settingsApi } from '@/services/apiService';
+import { Textarea } from '@/components/ui/textarea';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { FieldError } from '@/components/AuthShell';
+import {
+  useCreateTaxGroupMutation, useDeleteTaxGroupMutation, useOutletQuery, useTaxGroupsQuery, useUpdateOutletMutation, useUpdateTaxGroupMutation,
+} from '@/store/endpoints/admin';
+import { useDevicesQuery, useRegisterDeviceMutation, useRemoveDeviceMutation } from '@/store/endpoints/auth';
+import { useAppSelector } from '@/store/hooks';
+import { fieldError, isApiError, toastError } from '@/lib/apiError';
+import { DEVICE_KEY } from '@/pages/admin/PinLoginPage';
+import type { OrderType, Outlet, TaxGroup } from '@/types/api';
 
-interface SettingsState {
-  restaurantName: string;
-  slug:           string;
-  address:        string;
-  phone:          string;
-  email:          string;
-  logoUrl:        string;
-  primaryColor:   string;
-  accentColor:    string;
-  currency:       string;
-  showNutritionalInfo: boolean;
-}
+const ORDER_TYPES: [OrderType, string][] = [['dine_in', 'Dine-in'], ['takeaway', 'Takeaway'], ['delivery', 'Delivery']];
 
-const DEFAULTS: SettingsState = {
-  restaurantName:      '',
-  slug:                '',
-  address:             '',
-  phone:               '',
-  email:               '',
-  logoUrl:             '',
-  primaryColor:        '#FF6B35',
-  accentColor:         '#F7931E',
-  currency:            'USD',
-  showNutritionalInfo: false,
-};
+const Toggle = ({ label, hint, checked, onChange }: { label: string; hint?: string; checked: boolean; onChange: (v: boolean) => void }) => (
+  <label className="flex items-start justify-between gap-4 py-2 cursor-pointer">
+    <span><span className="font-medium text-sm">{label}</span>{hint && <span className="block text-xs text-gray-500">{hint}</span>}</span>
+    <Switch checked={checked} onCheckedChange={onChange} />
+  </label>
+);
 
-const fromApi = (data: any): SettingsState => ({
-  restaurantName:      data?.restaurantName      ?? '',
-  slug:                data?.slug                ?? '',
-  address:             data?.address             ?? '',
-  phone:               data?.phone               ?? '',
-  email:               data?.email               ?? '',
-  logoUrl:             data?.logoUrl             ?? '',
-  primaryColor:        data?.primaryColor        ?? '#FF6B35',
-  accentColor:         data?.accentColor         ?? '#F7931E',
-  currency:            data?.currency            ?? 'USD',
-  showNutritionalInfo: data?.showNutritionalInfo ?? false,
-});
+function OutletForm({ outlet }: { outlet: Outlet }) {
+  const [o, setO] = useState(outlet);
+  const [error, setError] = useState<unknown>(null);
+  const [save, saving] = useUpdateOutletMutation();
+  useEffect(() => setO(outlet), [outlet]);
 
-export const AdminSettings: React.FC = () => {
-  const { currentRestaurant, refreshSettings } = useRestaurant();
+  const set = <K extends keyof Outlet>(k: K, v: Outlet[K]) => setO((s) => ({ ...s, [k]: v }));
+  const text = (k: keyof Outlet, label: string, props: React.ComponentProps<typeof Input> = {}) => (
+    <div>
+      <Label>{label}</Label>
+      <Input value={String(o[k] ?? '')} onChange={(e) => set(k, e.target.value as never)} {...props} />
+      <FieldError>{fieldError(error, k)}</FieldError>
+    </div>
+  );
 
-  const [form, setForm] = useState<SettingsState>(DEFAULTS);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSaving, setIsSaving]   = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  const set = (field: keyof SettingsState, value: any) =>
-    setForm(prev => ({ ...prev, [field]: value }));
-
-  // ── GET /api/Settings ─────────────────────────────────────────────────────
-  const loadSettings = async () => {
-    setIsLoading(true);
-    setLoadError(null);
+  const submit = async () => {
+    setError(null);
+    const { id, ...body } = o;
     try {
-      const data = await settingsApi.get();
-      if (data) setForm(fromApi(data));
-    } catch (err: any) {
-      setLoadError('Could not load settings from server. Showing defaults.');
-    } finally {
-      setIsLoading(false);
+      await save({ id, ...body }).unwrap();
+      toast.success('Settings saved');
+    } catch (e) {
+      setError(e);
+      toastError(e, isApiError(e) && e.errors ? 'Check the highlighted fields' : undefined);
     }
   };
-
-  useEffect(() => { loadSettings(); }, []);
-
-  // ── PUT /api/Settings ─────────────────────────────────────────────────────
-  const handleSave = async () => {
-    setIsSaving(true);
-    try {
-      await settingsApi.update(form);
-      toast.success('Settings saved!');
-      await Promise.all([loadSettings(), refreshSettings()]);
-    } catch (err) {
-      toast.error('Failed to save settings.');
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  // ── Loading ───────────────────────────────────────────────────────────────
-  if (isLoading) {
-    return (
-      <div className="flex flex-col items-center justify-center h-64 gap-3">
-        <Loader2 className="w-8 h-8 animate-spin text-accent" />
-        <p className="text-sm text-gray-500">Loading settings…</p>
-      </div>
-    );
-  }
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Restaurant Settings</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
-            {currentRestaurant?.name ?? 'Your restaurant'} · synced with backend
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={loadSettings} className="gap-2">
-            <RefreshCw className="h-4 w-4" /> Reload
-          </Button>
-          <Button onClick={handleSave} disabled={isSaving} className="gap-2">
-            {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            {isSaving ? 'Saving…' : 'Save Changes'}
-          </Button>
-        </div>
-      </div>
+    <div className="space-y-4 max-w-3xl">
+      <Card>
+        <CardHeader><CardTitle className="text-base">Outlet</CardTitle></CardHeader>
+        <CardContent className="grid sm:grid-cols-2 gap-3">
+          {text('name', 'Name')}
+          {text('slug', 'Menu link', { placeholder: 'spice-route-ahmedabad' })}
+          {text('phone', 'Phone')}
+          {text('email', 'Email')}
+          {text('city', 'City')}
+          <div className="sm:col-span-2">
+            <Label>Address (printed on bills)</Label>
+            <Textarea rows={2} value={o.address} onChange={(e) => set('address', e.target.value)} maxLength={300} />
+          </div>
+          <div className="sm:col-span-2">
+            <Toggle label="Open for orders" hint="When off, customers can browse the QR menu but can't order" checked={o.isOpen} onChange={(v) => set('isOpen', v)} />
+          </div>
+        </CardContent>
+      </Card>
 
-      {loadError && (
-        <div className="bg-amber-50 border border-amber-200 text-amber-700 text-sm px-4 py-3 rounded-xl">
-          {loadError}
-        </div>
-      )}
+      <Card>
+        <CardHeader><CardTitle className="text-base">GST & billing</CardTitle><CardDescription>Changes apply to new bills only.</CardDescription></CardHeader>
+        <CardContent className="grid sm:grid-cols-2 gap-3">
+          {text('gstin', 'GSTIN', { placeholder: '24AAACS1234A1Z5', maxLength: 15, onChange: (e) => set('gstin', e.target.value.toUpperCase()) })}
+          {text('fssai', 'FSSAI licence no.', { maxLength: 14 })}
+          {text('billPrefix', 'Bill number prefix', { maxLength: 6, onChange: (e) => set('billPrefix', e.target.value.toUpperCase()) })}
+          <div>
+            <Label>Round off total</Label>
+            <div className="flex gap-2 mt-1">
+              {(['nearest_rupee', 'none'] as const).map((r) => (
+                <Button key={r} type="button" size="sm" variant={o.roundOff === r ? 'default' : 'outline'} onClick={() => set('roundOff', r)}>{r === 'none' ? 'No' : 'To nearest ₹'}</Button>
+              ))}
+            </div>
+          </div>
+          <div className="sm:col-span-2 divide-y">
+            <Toggle label="Menu prices include GST" hint="Off: GST is added on top of menu prices" checked={o.pricesIncludeTax} onChange={(v) => set('pricesIncludeTax', v)} />
+            <Toggle label="Service charge" checked={o.serviceCharge.enabled} onChange={(v) => set('serviceCharge', { ...o.serviceCharge, enabled: v })} />
+          </div>
+          {o.serviceCharge.enabled && (
+            <div className="sm:col-span-2 flex flex-wrap items-center gap-3">
+              <Input className="w-24" inputMode="decimal" value={o.serviceCharge.percent} onChange={(e) => set('serviceCharge', { ...o.serviceCharge, percent: Number(e.target.value) || 0 })} />
+              <span className="text-sm">% on</span>
+              {ORDER_TYPES.map(([t, label]) => (
+                <label key={t} className="flex items-center gap-1 text-sm">
+                  <input type="checkbox" checked={o.serviceCharge.orderTypes.includes(t)}
+                    onChange={(e) => set('serviceCharge', { ...o.serviceCharge, orderTypes: e.target.checked ? [...o.serviceCharge.orderTypes, t] : o.serviceCharge.orderTypes.filter((x) => x !== t) })} />
+                  {label}
+                </label>
+              ))}
+            </div>
+          )}
+          <div><Label>Bill header</Label><Textarea rows={2} value={o.bill.header} onChange={(e) => set('bill', { ...o.bill, header: e.target.value })} maxLength={300} /></div>
+          <div><Label>Bill footer</Label><Textarea rows={2} value={o.bill.footer} onChange={(e) => set('bill', { ...o.bill, footer: e.target.value })} maxLength={300} /></div>
+        </CardContent>
+      </Card>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <Card>
+        <CardHeader><CardTitle className="text-base">Ordering</CardTitle></CardHeader>
+        <CardContent className="space-y-2">
+          <div className="flex flex-wrap gap-3">
+            {ORDER_TYPES.map(([t, label]) => (
+              <label key={t} className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={o.orderTypes.includes(t)}
+                  onChange={(e) => set('orderTypes', e.target.checked ? [...o.orderTypes, t] : o.orderTypes.filter((x) => x !== t))} />
+                {label}
+              </label>
+            ))}
+          </div>
+          <div className="divide-y">
+            <Toggle label="Customers can order from the table QR" checked={o.qrOrdering.enabled} onChange={(v) => set('qrOrdering', { ...o.qrOrdering, enabled: v })} />
+            <Toggle label="Staff must accept QR orders" hint="Stops prank orders. When off, QR orders go straight to the kitchen." checked={o.qrOrdering.requireAcceptance} onChange={(v) => set('qrOrdering', { ...o.qrOrdering, requireAcceptance: v })} />
+          </div>
+        </CardContent>
+      </Card>
 
-        {/* ── Restaurant Information ── */}
-        <motion.div initial={{ y: 16, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.05 }}>
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <MapPin className="h-4 w-4" /> Restaurant Information
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div>
-                <Label htmlFor="restaurantName">Restaurant Name</Label>
-                <Input
-                  id="restaurantName"
-                  value={form.restaurantName}
-                  onChange={e => set('restaurantName', e.target.value)}
-                  placeholder="e.g. Bella Vista"
-                />
-              </div>
+      <Card>
+        <CardHeader><CardTitle className="text-base">Menu colours</CardTitle></CardHeader>
+        <CardContent className="flex flex-wrap gap-6">
+          {(['primaryColor', 'accentColor'] as const).map((k) => (
+            <label key={k} className="flex items-center gap-2 text-sm">
+              <input type="color" value={o.theme[k]} onChange={(e) => set('theme', { ...o.theme, [k]: e.target.value })} className="h-9 w-12 rounded border" />
+              {k === 'primaryColor' ? 'Primary' : 'Accent'}
+            </label>
+          ))}
+        </CardContent>
+      </Card>
 
-              <div>
-                <Label htmlFor="slug">URL Slug</Label>
-                <Input
-                  id="slug"
-                  value={form.slug}
-                  onChange={e => set('slug', e.target.value.toLowerCase().replace(/\s+/g, '-'))}
-                  placeholder="bella-vista"
-                />
-                <p className="text-xs text-gray-400 mt-1">
-                  Menu URL: /menu/<strong>{form.slug || 'your-slug'}</strong>
-                </p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="phone">Phone</Label>
-                  <Input
-                    id="phone"
-                    value={form.phone}
-                    onChange={e => set('phone', e.target.value)}
-                    placeholder="+1 555 123 4567"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="email">Email</Label>
-                  <Input
-                    id="email"
-                    type="email"
-                    value={form.email}
-                    onChange={e => set('email', e.target.value)}
-                    placeholder="info@restaurant.com"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <Label htmlFor="address">Address</Label>
-                <Input
-                  id="address"
-                  value={form.address}
-                  onChange={e => set('address', e.target.value)}
-                  placeholder="123 Main Street, City"
-                />
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-
-        {/* ── Appearance ── */}
-        <motion.div initial={{ y: 16, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.1 }}>
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <Palette className="h-4 w-4" /> Appearance & Branding
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label>Primary Color</Label>
-                  <div className="flex items-center gap-2 mt-1">
-                    <Input
-                      type="color"
-                      value={form.primaryColor}
-                      onChange={e => set('primaryColor', e.target.value)}
-                      className="w-12 h-9 p-0.5 rounded cursor-pointer"
-                    />
-                    <Input
-                      value={form.primaryColor}
-                      onChange={e => set('primaryColor', e.target.value)}
-                      className="font-mono text-sm"
-                    />
-                  </div>
-                </div>
-                <div>
-                  <Label>Accent Color</Label>
-                  <div className="flex items-center gap-2 mt-1">
-                    <Input
-                      type="color"
-                      value={form.accentColor}
-                      onChange={e => set('accentColor', e.target.value)}
-                      className="w-12 h-9 p-0.5 rounded cursor-pointer"
-                    />
-                    <Input
-                      value={form.accentColor}
-                      onChange={e => set('accentColor', e.target.value)}
-                      className="font-mono text-sm"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <Label htmlFor="logoUrl">Logo URL</Label>
-                <div className="flex items-center gap-2 mt-1">
-                  <Input
-                    id="logoUrl"
-                    value={form.logoUrl}
-                    onChange={e => set('logoUrl', e.target.value)}
-                    placeholder="https://…/logo.png"
-                  />
-                  <Button size="sm" variant="outline" title="Upload coming soon">
-                    <Upload className="h-4 w-4" />
-                  </Button>
-                </div>
-                {form.logoUrl && (
-                  <img
-                    src={form.logoUrl}
-                    alt="Logo preview"
-                    className="mt-2 h-12 w-auto rounded border border-gray-100 object-contain"
-                    onError={e => (e.currentTarget.style.display = 'none')}
-                  />
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-
-        {/* ── Menu Display ── */}
-        <motion.div
-          initial={{ y: 16, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          transition={{ delay: 0.15 }}
-          className="lg:col-span-2"
-        >
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <DollarSign className="h-4 w-4" /> Menu Display Settings
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                <div className="space-y-3">
-                  <Label>Currency</Label>
-                  <select
-                    value={form.currency}
-                    onChange={e => set('currency', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-accent/30"
-                  >
-                    <option value="USD">USD ($)</option>
-                    <option value="EUR">EUR (€)</option>
-                    <option value="GBP">GBP (£)</option>
-                    <option value="INR">INR (₹)</option>
-                    <option value="CAD">CAD (C$)</option>
-                    <option value="AUD">AUD (A$)</option>
-                  </select>
-                </div>
-
-                <div className="flex items-center justify-between sm:pt-6">
-                  <div>
-                    <Label htmlFor="showNutrition" className="cursor-pointer">Show Nutritional Info</Label>
-                    <p className="text-xs text-gray-400 mt-0.5">Display calories & macros on menu items</p>
-                  </div>
-                  <Switch
-                    id="showNutrition"
-                    checked={form.showNutritionalInfo}
-                    onCheckedChange={v => set('showNutritionalInfo', v)}
-                  />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-
+      <div className="sticky bottom-0 bg-gray-50 py-3">
+        <Button onClick={submit} disabled={saving.isLoading}>{saving.isLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />} Save settings</Button>
       </div>
     </div>
+  );
+}
+
+function TaxGroups() {
+  const { data = [] } = useTaxGroupsQuery();
+  const [create] = useCreateTaxGroupMutation();
+  const [update] = useUpdateTaxGroupMutation();
+  const [del] = useDeleteTaxGroupMutation();
+  const [editing, setEditing] = useState<(Omit<TaxGroup, 'id'> & { id?: string }) | null>(null);
+
+  const save = async () => {
+    if (!editing) return;
+    try {
+      if (editing.id) await update(editing as TaxGroup).unwrap();
+      else await create(editing).unwrap();
+      setEditing(null);
+    } catch (e) { toastError(e); }
+  };
+
+  return (
+    <div className="space-y-3 max-w-2xl">
+      <p className="text-sm text-gray-500">Restaurant food is usually GST 5% (2.5% CGST + 2.5% SGST). Changing a rate only affects new orders.</p>
+      <Button onClick={() => setEditing({ name: '', components: [{ name: 'CGST', rate: 2.5 }, { name: 'SGST', rate: 2.5 }] })}><Plus className="h-4 w-4 mr-1" /> Tax group</Button>
+      <Card>
+        <CardContent className="p-0 divide-y">
+          {data.map((t) => (
+            <div key={t.id} className="flex items-center justify-between p-3">
+              <div><p className="font-medium">{t.name}</p><p className="text-xs text-gray-500">{t.components.map((c) => `${c.name} ${c.rate}%`).join(' + ') || 'No tax'}</p></div>
+              <div className="flex">
+                <Button size="sm" variant="ghost" onClick={() => setEditing(t)}>Edit</Button>
+                <Button size="icon" variant="ghost" className="text-gray-400 hover:text-red-600" onClick={() => del(t.id).unwrap().catch(toastError)}><Trash2 className="h-4 w-4" /></Button>
+              </div>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+      <Dialog open={Boolean(editing)} onOpenChange={(o) => !o && setEditing(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>{editing?.id ? 'Edit tax group' : 'New tax group'}</DialogTitle></DialogHeader>
+          {editing && (
+            <div className="space-y-2">
+              <Input placeholder="GST 18%" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
+              {editing.components.map((c, i) => (
+                <div key={i} className="flex gap-2">
+                  <Input value={c.name} onChange={(e) => setEditing({ ...editing, components: editing.components.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)) })} />
+                  <Input className="w-24" inputMode="decimal" value={c.rate} onChange={(e) => setEditing({ ...editing, components: editing.components.map((x, j) => (j === i ? { ...x, rate: Number(e.target.value) || 0 } : x)) })} />
+                  <Button size="icon" variant="ghost" onClick={() => setEditing({ ...editing, components: editing.components.filter((_, j) => j !== i) })}><X className="h-4 w-4" /></Button>
+                </div>
+              ))}
+              <Button size="sm" variant="ghost" onClick={() => setEditing({ ...editing, components: [...editing.components, { name: 'CESS', rate: 0 }] })}><Plus className="h-4 w-4 mr-1" /> Component</Button>
+            </div>
+          )}
+          <DialogFooter><Button onClick={save} disabled={!editing?.name.trim()}>Save</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function Devices() {
+  const { data = [] } = useDevicesQuery();
+  const [register, registering] = useRegisterDeviceMutation();
+  const [remove] = useRemoveDeviceMutation();
+  const [name, setName] = useState('');
+  const [token, setToken] = useState<string | null>(null);
+
+  const add = async () => {
+    try {
+      const r = await register({ name: name.trim() }).unwrap();
+      setToken(r.deviceToken);
+      setName('');
+    } catch (e) { toastError(e); }
+  };
+
+  const useHere = () => {
+    try { localStorage.setItem(DEVICE_KEY, token!); } catch { /* ignore */ }
+    toast.success('This browser is now a POS terminal. Staff can use PIN login at /admin/pin');
+    setToken(null);
+  };
+
+  return (
+    <div className="space-y-3 max-w-2xl">
+      <p className="text-sm text-gray-500">A registered terminal (counter PC, tablet) lets staff switch users with a 4–6 digit PIN instead of a password.</p>
+      <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); if (name.trim()) add(); }}>
+        <Input placeholder="Counter 1" value={name} onChange={(e) => setName(e.target.value)} className="bg-white" maxLength={60} />
+        <Button type="submit" disabled={registering.isLoading}><Monitor className="h-4 w-4 mr-1" /> Register</Button>
+      </form>
+      <Card>
+        <CardContent className="p-0 divide-y">
+          {data.map((d) => (
+            <div key={d.id} className="flex items-center justify-between p-3">
+              <div><p className="font-medium">{d.name}</p><p className="text-xs text-gray-500">{d.lastUsedAt ? `Last used ${new Date(d.lastUsedAt).toLocaleString('en-IN')}` : 'Never used'}</p></div>
+              <Button size="icon" variant="ghost" className="text-gray-400 hover:text-red-600" onClick={() => remove(d.id).unwrap().catch(toastError)}><Trash2 className="h-4 w-4" /></Button>
+            </div>
+          ))}
+          {!data.length && <p className="p-4 text-sm text-gray-500">No terminals yet</p>}
+        </CardContent>
+      </Card>
+      <Dialog open={Boolean(token)} onOpenChange={(o) => !o && setToken(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Terminal registered</DialogTitle>
+            <DialogDescription>This key is shown once. Use it on this browser now, or copy it to the terminal.</DialogDescription>
+          </DialogHeader>
+          <code className="block break-all rounded bg-gray-100 p-3 text-xs">{token}</code>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => navigator.clipboard.writeText(token!).then(() => toast.success('Copied'))}><Copy className="h-4 w-4 mr-1" /> Copy</Button>
+            <Button onClick={useHere}>Use this browser</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+export const AdminSettings: React.FC = () => {
+  const outletId = useAppSelector((s) => s.session.outletId);
+  const { data: outlet, isLoading } = useOutletQuery(outletId!, { skip: !outletId });
+  if (isLoading || !outlet) return <Loader2 className="h-8 w-8 animate-spin mx-auto mt-20 text-gray-400" />;
+  return (
+    <Tabs defaultValue="outlet">
+      <TabsList className="mb-4">
+        <TabsTrigger value="outlet">Outlet</TabsTrigger>
+        <TabsTrigger value="taxes">Taxes</TabsTrigger>
+        <TabsTrigger value="devices">POS terminals</TabsTrigger>
+      </TabsList>
+      <TabsContent value="outlet"><OutletForm outlet={outlet} /></TabsContent>
+      <TabsContent value="taxes"><TaxGroups /></TabsContent>
+      <TabsContent value="devices"><Devices /></TabsContent>
+    </Tabs>
   );
 };

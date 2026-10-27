@@ -1,768 +1,214 @@
-import React, { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { QrCode, Download, Share, Copy, Check, Plus, Trash2, Edit, Table, MapPin } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import React, { useState } from 'react';
+import { QRCodeCanvas } from 'qrcode.react';
+import { Copy, Download, Edit, Loader2, Plus, Printer, RefreshCw, Trash2 } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useRestaurant } from '@/contexts/RestaurantContext';
-import { QRGenerator } from '@/components/QRGenerator';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import { Switch } from '@/components/ui/switch';
-import { toast } from 'sonner';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import {
+  useAreasQuery, useCreateAreaMutation, useCreateTableMutation, useDeleteAreaMutation, useDeleteTableMutation,
+  useRotateQrMutation, useTablesQuery, useUpdateTableMutation,
+} from '@/store/endpoints/floor';
+import { useAppSelector } from '@/store/hooks';
+import { toastError } from '@/lib/apiError';
+import type { Table } from '@/types/api';
 
-interface QRCodeData {
-  id: string;
-  name: string;
-  url: string;
-  description: string;
-  scans: number;
-  created: string;
-  active: boolean;
-  tableId?: string;
-  type: 'general' | 'table' | 'special';
+const NONE = '__none';
+
+function downloadQr(table: Table) {
+  const canvas = document.getElementById(`qr-${table.id}`) as HTMLCanvasElement | null;
+  if (!canvas) return;
+  const a = document.createElement('a');
+  a.href = canvas.toDataURL('image/png');
+  a.download = `table-${table.name}.png`;
+  a.click();
+}
+
+// Printable sheet: one tent card per table, drawn from the on-page canvases.
+function printAll(tables: Table[], outletName: string) {
+  const cards = tables.map((t) => {
+    const canvas = document.getElementById(`qr-${t.id}`) as HTMLCanvasElement | null;
+    return canvas ? `<div class="card"><h2>${outletName.replace(/</g, '&lt;')}</h2><img src="${canvas.toDataURL()}"/><p class="t">Table ${t.name.replace(/</g, '&lt;')}</p><p>Scan to see the menu & order</p></div>` : '';
+  }).join('');
+  const w = window.open('', '_blank');
+  if (!w) return toast.error('Allow pop-ups to print');
+  w.document.write(`<!doctype html><html><head><title>Table QR codes</title><style>
+    body{font-family:system-ui,sans-serif;margin:0}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12mm;padding:10mm}
+    .card{border:1px dashed #999;border-radius:8px;padding:8mm;text-align:center;page-break-inside:avoid}
+    img{width:55mm;height:55mm}h2{margin:0 0 4mm;font-size:16pt}.t{font-size:20pt;font-weight:700;margin:3mm 0 1mm}p{margin:0;color:#444}
+  </style></head><body><div class="grid">${cards}</div><script>onload=()=>print()</script></body></html>`);
+  w.document.close();
 }
 
 export const QRCodesPage: React.FC = () => {
-  const { currentRestaurant, tables, getTablesByRestaurant, addTable, updateTable, deleteTable } = useRestaurant();
-  const [selectedQR, setSelectedQR] = useState<QRCodeData | null>(null);
-  const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [newQRName, setNewQRName] = useState('');
-  const [newQRUrl, setNewQRUrl] = useState('');
-  const [qrCodes, setQrCodes] = useState<QRCodeData[]>([]);
-  const [filterType, setFilterType] = useState<'all' | 'general' | 'table' | 'special'>('all');
+  const outletName = useAppSelector((s) => s.session.profile?.outlets.find((o) => o.id === s.session.outletId)?.name ?? '');
+  const { data: tables = [], isLoading } = useTablesQuery();
+  const { data: areas = [] } = useAreasQuery();
+  const [createArea] = useCreateAreaMutation();
+  const [deleteArea] = useDeleteAreaMutation();
+  const [createTable, creatingTable] = useCreateTableMutation();
+  const [updateTable] = useUpdateTableMutation();
+  const [deleteTable] = useDeleteTableMutation();
+  const [rotate] = useRotateQrMutation();
 
-  const [isAddTableOpen, setIsAddTableOpen] = useState(false);
-  const [isDeleteOpen, setIsDeleteOpen] = useState(false);
-  const [qrToDelete, setQrToDelete] = useState<QRCodeData | null>(null);
-  const [isDeleting, setIsDeleting] = useState(false);
-  const [newTableNumber, setNewTableNumber] = useState('');
-  const [newTableName, setNewTableName] = useState('');
-  const [newTableCapacity, setNewTableCapacity] = useState('4');
-  const [newTableLocation, setNewTableLocation] = useState('Main Dining');
-  const [newTableActive, setNewTableActive] = useState(true);
-  const [isSubmittingTable, setIsSubmittingTable] = useState(false);
+  const [areaName, setAreaName] = useState('');
+  const [form, setForm] = useState<{ id?: string; name: string; areaId: string; capacity: string } | null>(null);
+  const [bulk, setBulk] = useState({ prefix: 'T', from: '1', to: '10', areaId: NONE, capacity: '4' });
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [confirm, setConfirm] = useState<{ title: string; body: string; run: () => Promise<unknown>; action: string } | null>(null);
+  const [filterArea, setFilterArea] = useState('all');
 
-  // Bulk add state
-  const [isBulkAddOpen, setIsBulkAddOpen] = useState(false);
-  const [bulkTableCount, setBulkTableCount] = useState(5);
-  const [bulkStartNumber, setBulkStartNumber] = useState(1);
-  const [bulkLocation, setBulkLocation] = useState('Main Dining');
-  const [isBulkSubmitting, setIsBulkSubmitting] = useState(false);
+  const shown = tables.filter((t) => filterArea === 'all' || (t.areaId || NONE) === filterArea);
+  const areaName_ = (id?: string | null) => areas.find((a) => a.id === id)?.name;
 
-  const handleAddTableSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!currentRestaurant || isSubmittingTable) return;
-
-    if (!newTableNumber.trim()) {
-      toast.error('Table number is required');
-      return;
-    }
-
-    const restaurantTables = getTablesByRestaurant(currentRestaurant.id);
-    const existingTable = restaurantTables.find(
-      t => t.tableNumber.trim().toLowerCase() === newTableNumber.trim().toLowerCase() &&
-        t.location.trim().toLowerCase() === newTableLocation.trim().toLowerCase()
-    );
-    if (existingTable) {
-      toast.error(`Table ${newTableNumber} already exists in ${newTableLocation}`);
-      return;
-    }
-
-    setIsSubmittingTable(true);
+  const saveTable = async () => {
+    if (!form) return;
+    const body = { name: form.name.trim(), areaId: form.areaId === NONE ? null : form.areaId, capacity: Number(form.capacity) || 4 };
     try {
-      await addTable({
-        restaurantId: currentRestaurant.id,
-        tableNumber: newTableNumber.trim(),
-        tableName: newTableName.trim() || undefined,
-        capacity: parseInt(newTableCapacity) || 4,
-        location: newTableLocation,
-        isActive: newTableActive
-      });
-      toast.success(`Table ${newTableNumber} created successfully`);
-      setIsAddTableOpen(false);
-      // Reset form
-      setNewTableNumber('');
-      setNewTableName('');
-      setNewTableCapacity('4');
-      setNewTableLocation('Main Dining');
-      setNewTableActive(true);
-    } catch (err) {
-      toast.error('Failed to create table');
-      console.error(err);
-    } finally {
-      setIsSubmittingTable(false);
+      if (form.id) await updateTable({ id: form.id, ...body }).unwrap();
+      else await createTable(body).unwrap();
+      setForm(null);
+    } catch (e) { toastError(e); }
+  };
+
+  const createBulk = async () => {
+    const from = Number(bulk.from);
+    const to = Number(bulk.to);
+    if (!(from >= 0 && to >= from && to - from < 100)) return toast.error('Pick a range of up to 100 tables');
+    let made = 0;
+    for (let n = from; n <= to; n++) {
+      try {
+        await createTable({ name: `${bulk.prefix}${n}`, areaId: bulk.areaId === NONE ? null : bulk.areaId, capacity: Number(bulk.capacity) || 4 }).unwrap();
+        made++;
+      } catch { /* duplicates are skipped */ }
     }
+    toast.success(`${made} table(s) added`);
+    setBulkOpen(false);
   };
 
-  const handleBulkAddTables = async () => {
-    if (!currentRestaurant || bulkTableCount < 1) {
-      toast.error('Please enter a valid number of tables');
-      return;
-    }
-
-    setIsBulkSubmitting(true);
-    try {
-      const restaurantTables = getTablesByRestaurant(currentRestaurant.id);
-      const existingNumbers = restaurantTables
-        .filter(t => t.location === bulkLocation)
-        .map(t => parseInt(t.tableNumber))
-        .filter(n => !isNaN(n));
-      const maxExisting = existingNumbers.length > 0 ? Math.max(...existingNumbers) : 0;
-      const startNumber = Math.max(bulkStartNumber, maxExisting + 1);
-
-      for (let i = 0; i < bulkTableCount; i++) {
-        const tableNumber = (startNumber + i).toString();
-        const exists = restaurantTables.some(
-          t => t.tableNumber === tableNumber && t.location === bulkLocation
-        );
-        if (!exists) {
-          await addTable({
-            restaurantId: currentRestaurant.id,
-            tableNumber,
-            capacity: 4,
-            location: bulkLocation,
-            isActive: true
-          });
-        }
-      }
-
-      toast.success(`Added ${bulkTableCount} table(s) to ${bulkLocation}`);
-      setIsBulkAddOpen(false);
-      setBulkTableCount(5);
-      setBulkStartNumber(1);
-      setBulkLocation('Main Dining');
-    } catch (err) {
-      toast.error('Failed to bulk add tables');
-      console.error(err);
-    } finally {
-      setIsBulkSubmitting(false);
-    }
-  };
-
-  // Generate QR codes based on restaurant tables and general menu
-  useEffect(() => {
-    if (currentRestaurant) {
-      const restaurantTables = getTablesByRestaurant(currentRestaurant.id);
-      const baseUrl = `${window.location.origin}/menu/${currentRestaurant.slug}`;
-
-      const generatedQRCodes: QRCodeData[] = [
-        {
-          id: 'general-menu',
-          name: 'General Menu',
-          url: baseUrl,
-          description: 'Main restaurant menu accessible to all customers',
-          scans: 1234,
-          created: currentRestaurant.createdAt,
-          active: true,
-          type: 'general'
-        },
-        ...restaurantTables.map(table => ({
-          id: `table-${table.id}`,
-          name: table.tableName || `Table ${table.tableNumber}`,
-          url: `${baseUrl}/${table.id}`,
-          description: `QR code for ${table.tableName || `Table ${table.tableNumber}`} in ${table.location}`,
-          scans: Math.floor(Math.random() * 500) + 50,
-          created: table.createdAt,
-          active: table.isActive,
-          tableId: table.id,
-          type: 'table' as const
-        }))
-      ];
-
-      setQrCodes(prev => {
-        // Keep custom QR codes that were manually generated
-        const customQRs = prev.filter(qr => qr.type === 'special');
-        return [...generatedQRCodes, ...customQRs];
-      });
-    }
-  }, [currentRestaurant, tables]);
-
-  const filteredQRCodes = qrCodes.filter(qr => {
-    if (filterType === 'all') return true;
-    return qr.type === filterType;
-  });
-
-  const generateQRCodeUrl = (data: string) => {
-    return `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(data)}&format=png&margin=20`;
-  };
-
-  const handleCopyUrl = async (url: string, id: string) => {
-    try {
-      await navigator.clipboard.writeText(url);
-      setCopiedId(id);
-      setTimeout(() => setCopiedId(null), 2000);
-    } catch (err) {
-      console.error('Failed to copy: ', err);
-    }
-  };
-
-  const handleDownloadQR = (qrData: QRCodeData) => {
-    const qrUrl = generateQRCodeUrl(qrData.url);
-    const link = document.createElement('a');
-    link.href = qrUrl;
-    link.download = `${qrData.name.replace(/\s+/g, '-').toLowerCase()}-qr.png`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  const handleCreateQR = () => {
-    if (newQRName.trim() && newQRUrl.trim()) {
-      const newQR: QRCodeData = {
-        id: `custom-${Date.now()}`,
-        name: newQRName,
-        url: newQRUrl,
-        description: 'Custom QR code',
-        scans: 0,
-        created: new Date().toISOString(),
-        active: true,
-        type: 'special'
-      };
-      setQrCodes(prev => [...prev, newQR]);
-      setNewQRName('');
-      setNewQRUrl('');
-    }
-  };
-
-  const handleToggleQR = (id: string) => {
-    setQrCodes(prev => prev.map(qr =>
-      qr.id === id ? { ...qr, active: !qr.active } : qr
-    ));
-  };
-
-  const handleDeleteQR = (qr: QRCodeData) => {
-    setQrToDelete(qr);
-    setIsDeleteOpen(true);
-  };
-
-  const handleConfirmDelete = async () => {
-    if (!qrToDelete) return;
-    setIsDeleting(true);
-    try {
-      if (qrToDelete.id.startsWith('table-')) {
-        const tableId = qrToDelete.id.replace('table-', '');
-        await deleteTable(tableId);
-      } else {
-        setQrCodes(prev => prev.filter(qr => qr.id !== qrToDelete.id));
-      }
-      toast.success(`QR code "${qrToDelete.name}" deleted successfully`);
-    } catch (err) {
-      toast.error('Failed to delete QR code');
-      console.error(err);
-    } finally {
-      setIsDeleting(false);
-      setIsDeleteOpen(false);
-      setQrToDelete(null);
-    }
-  };
-
-  if (!currentRestaurant) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-center">
-          <QrCode className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-          <h3 className="text-lg font-semibold text-gray-900 mb-2">No Restaurant Selected</h3>
-          <p className="text-gray-500">Please select a restaurant to manage QR codes.</p>
-        </div>
-      </div>
-    );
-  }
+  if (isLoading) return <Loader2 className="h-8 w-8 animate-spin mx-auto mt-20 text-gray-400" />;
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row gap-4 justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">QR Code Management</h1>
-          <p className="text-gray-500 mt-1">Generate and manage QR codes for {currentRestaurant.name}</p>
-        </div>
-        <div className="flex gap-2">
-          <QRGenerator
-            restaurantName={currentRestaurant.name}
-            menuUrl={`${window.location.origin}/menu/${currentRestaurant.slug}`}
-            showTableSelector={true}
-          />
-          <Button variant="outline" className="flex items-center gap-2" onClick={() => setIsBulkAddOpen(true)}>
-            <Plus className="h-4 w-4" />
-            Bulk Add Tables
-          </Button>
-          <Button variant="outline" className="flex items-center gap-2" onClick={() => setIsAddTableOpen(true)}>
-            <Plus className="h-4 w-4" />
-            Add Table
-          </Button>
-        </div>
-      </div>
+    <div className="space-y-5">
+      <Card>
+        <CardContent className="p-4 space-y-3">
+          <h3 className="font-semibold">Areas</h3>
+          <div className="flex flex-wrap gap-2">
+            {areas.map((a) => (
+              <Badge key={a.id} variant="secondary" className="text-sm py-1 pl-3 pr-1 gap-1">
+                {a.name}
+                <button className="hover:text-red-600 p-0.5" onClick={() => setConfirm({ title: `Delete ${a.name}?`, body: 'Only empty areas can be deleted.', action: 'Delete', run: () => deleteArea(a.id).unwrap() })}><Trash2 className="h-3 w-3" /></button>
+              </Badge>
+            ))}
+            <form className="flex gap-1" onSubmit={(e) => { e.preventDefault(); if (areaName.trim()) createArea({ name: areaName.trim(), sortOrder: areas.length }).unwrap().then(() => setAreaName('')).catch(toastError); }}>
+              <Input className="h-8 w-40" placeholder="Indoor, Terrace…" value={areaName} onChange={(e) => setAreaName(e.target.value)} />
+              <Button size="sm" type="submit" variant="outline"><Plus className="h-4 w-4" /></Button>
+            </form>
+          </div>
+        </CardContent>
+      </Card>
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2">
-              <QrCode className="h-8 w-8 text-blue-600" />
-              <div>
-                <p className="text-sm text-gray-600">Total QR Codes</p>
-                <p className="text-2xl font-bold">{qrCodes.length}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2">
-              <Table className="h-8 w-8 text-green-600" />
-              <div>
-                <p className="text-sm text-gray-600">Table QR Codes</p>
-                <p className="text-2xl font-bold">{qrCodes.filter(qr => qr.type === 'table').length}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 bg-green-100 rounded-lg flex items-center justify-center">
-                <div className="w-2 h-2 bg-green-600 rounded-full"></div>
-              </div>
-              <div>
-                <p className="text-sm text-gray-600">Active</p>
-                <p className="text-2xl font-bold">{qrCodes.filter(qr => qr.active).length}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center">
-                <div className="text-purple-600 text-xs font-bold">👆</div>
-              </div>
-              <div>
-                <p className="text-sm text-gray-600">Total Scans</p>
-                <p className="text-2xl font-bold">{qrCodes.reduce((sum, qr) => sum + qr.scans, 0).toLocaleString()}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Filter */}
-      <div className="flex items-center gap-4">
-        <Label>Filter by type:</Label>
-        <Select value={filterType} onValueChange={(value: any) => setFilterType(value)}>
-          <SelectTrigger className="w-full sm:w-48">
-            <SelectValue />
-          </SelectTrigger>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Select value={filterArea} onValueChange={setFilterArea}>
+          <SelectTrigger className="w-44 bg-white"><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All QR Codes</SelectItem>
-            <SelectItem value="general">General Menu</SelectItem>
-            <SelectItem value="table">Table QR Codes</SelectItem>
-            <SelectItem value="special">Custom QR Codes</SelectItem>
+            <SelectItem value="all">All areas</SelectItem>
+            {areas.map((a) => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}
+            <SelectItem value={NONE}>No area</SelectItem>
           </SelectContent>
         </Select>
-      </div>
-
-      {/* Create New QR Code */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Create New QR Code</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <Label htmlFor="qrName">QR Code Name</Label>
-              <Input
-                id="qrName"
-                value={newQRName}
-                onChange={(e) => setNewQRName(e.target.value)}
-                placeholder="e.g., Lunch Menu QR"
-              />
-            </div>
-            <div>
-              <Label htmlFor="qrUrl">Target URL</Label>
-              <Input
-                id="qrUrl"
-                value={newQRUrl}
-                onChange={(e) => setNewQRUrl(e.target.value)}
-                placeholder="https://yourrestaurant.com/menu"
-              />
-            </div>
-            <div className="flex items-end">
-              <Button onClick={handleCreateQR} className="w-full">
-                Generate QR Code
-              </Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* QR Codes Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6">
-        {filteredQRCodes.map((qrData, index) => (
-          <motion.div
-            key={qrData.id}
-            initial={{ y: 20, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            transition={{ duration: 0.6, delay: index * 0.1 }}
-          >
-            <Card className="relative">
-              <CardHeader className="pb-4">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <CardTitle className="text-lg">{qrData.name}</CardTitle>
-                      {qrData.type === 'table' && <Table className="w-4 h-4 text-blue-600" />}
-                      {qrData.type === 'general' && <QrCode className="w-4 h-4 text-green-600" />}
-                      {qrData.type === 'special' && <MapPin className="w-4 h-4 text-purple-600" />}
-                    </div>
-                    <p className="text-sm text-gray-500 mt-1">{qrData.description}</p>
-                  </div>
-                  <div className="flex flex-col gap-2">
-                    <Badge variant={qrData.active ? "default" : "secondary"}>
-                      {qrData.active ? 'Active' : 'Inactive'}
-                    </Badge>
-                    <Badge variant="outline" className="text-xs">
-                      {qrData.type}
-                    </Badge>
-                  </div>
-                </div>
-              </CardHeader>
-
-              <CardContent className="space-y-4">
-                {/* QR Code Preview */}
-                <div className="flex justify-center p-4 bg-white border rounded-lg">
-                  <img
-                    src={generateQRCodeUrl(qrData.url)}
-                    alt={`QR Code for ${qrData.name}`}
-                    className="w-24 h-24 sm:w-32 sm:h-32"
-                  />
-                </div>
-
-                {/* Stats */}
-                <div className="grid grid-cols-2 gap-4 text-center">
-                  <div>
-                    <p className="text-2xl font-bold text-gray-900">{qrData.scans.toLocaleString()}</p>
-                    <p className="text-sm text-gray-500">Total Scans</p>
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-gray-900">
-                      {new Date(qrData.created).toLocaleDateString()}
-                    </p>
-                    <p className="text-sm text-gray-500">Created</p>
-                  </div>
-                </div>
-
-                {/* URL */}
-                <div className="space-y-2">
-                  <Label className="text-xs text-gray-500">Target URL</Label>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      value={qrData.url}
-                      readOnly
-                      className="text-xs bg-gray-50"
-                    />
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => handleCopyUrl(qrData.url, qrData.id)}
-                      className="flex-shrink-0"
-                    >
-                      {copiedId === qrData.id ? (
-                        <Check className="h-4 w-4 text-green-600" />
-                      ) : (
-                        <Copy className="h-4 w-4" />
-                      )}
-                    </Button>
-                  </div>
-                </div>
-
-                {/* Actions */}
-                <div className="flex flex-wrap gap-2 pt-2">
-                  <Button
-                    size="sm"
-                    onClick={() => handleDownloadQR(qrData)}
-                    className="flex-1 min-w-[120px]"
-                  >
-                    <Download className="h-4 w-4 mr-2" />
-                    Download
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => handleToggleQR(qrData.id)}
-                    className="flex-1 min-w-[100px]"
-                  >
-                    {qrData.active ? 'Deactivate' : 'Activate'}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => handleDeleteQR(qrData)}
-                    className="text-red-600 hover:text-red-700 px-3 flex-shrink-0"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          </motion.div>
-        ))}
-      </div>
-
-      {filteredQRCodes.length === 0 && (
-        <div className="text-center py-12">
-          <QrCode className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-          <h3 className="text-lg font-semibold text-gray-900 mb-2">No QR Codes Found</h3>
-          <p className="text-gray-500 mb-4">
-            {filterType === 'all'
-              ? 'No QR codes have been created yet.'
-              : `No ${filterType} QR codes found.`}
-          </p>
-          <QRGenerator
-            restaurantName={currentRestaurant.name}
-            menuUrl={`${window.location.origin}/menu/${currentRestaurant.slug}`}
-            showTableSelector={true}
-          />
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => printAll(shown, outletName)} disabled={!shown.length}><Printer className="h-4 w-4 mr-1" /> Print QR sheet</Button>
+          <Button variant="outline" onClick={() => setBulkOpen(true)}>Add many</Button>
+          <Button onClick={() => setForm({ name: '', areaId: filterArea !== 'all' ? filterArea : NONE, capacity: '4' })}><Plus className="h-4 w-4 mr-1" /> Table</Button>
         </div>
-      )}
+      </div>
 
-      {/* Usage Tips */}
-      <Card>
-        <CardHeader>
-          <CardTitle>QR Code Usage Tips</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div>
-              <h4 className="font-semibold mb-2">Best Practices</h4>
-              <ul className="space-y-1 text-sm text-gray-600">
-                <li>• Place QR codes at eye level on tables</li>
-                <li>• Ensure good lighting for easy scanning</li>
-                <li>• Include clear scanning instructions</li>
-                <li>• Test QR codes regularly to ensure they work</li>
-                <li>• Use high contrast colors (black on white works best)</li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="font-semibold mb-2">Recommended Sizes</h4>
-              <ul className="space-y-1 text-sm text-gray-600">
-                <li>• Table tents: 2" x 2" minimum</li>
-                <li>• Menu inserts: 1.5" x 1.5" minimum</li>
-                <li>• Window displays: 4" x 4" or larger</li>
-                <li>• Digital screens: Scale appropriately</li>
-                <li>• Print quality: 300 DPI minimum</li>
-              </ul>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+        {shown.map((t) => (
+          <Card key={t.id} className={!t.isActive ? 'opacity-60' : ''}>
+            <CardContent className="p-3 text-center space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-lg">{t.name}</span>
+                <span className="text-xs text-gray-500">{areaName_(t.areaId) ?? ''} · {t.capacity} seats</span>
+              </div>
+              <QRCodeCanvas id={`qr-${t.id}`} value={t.qrUrl} size={512} level="M" marginSize={2} style={{ width: '100%', height: 'auto' }} />
+              <div className="flex justify-center gap-1">
+                <Button size="icon" variant="ghost" title="Download PNG" onClick={() => downloadQr(t)}><Download className="h-4 w-4" /></Button>
+                <Button size="icon" variant="ghost" title="Copy link" onClick={() => navigator.clipboard.writeText(t.qrUrl).then(() => toast.success('Link copied'))}><Copy className="h-4 w-4" /></Button>
+                <Button size="icon" variant="ghost" title="Edit" onClick={() => setForm({ id: t.id, name: t.name, areaId: t.areaId || NONE, capacity: String(t.capacity) })}><Edit className="h-4 w-4" /></Button>
+                <Button size="icon" variant="ghost" title="New QR (old one stops working)"
+                  onClick={() => setConfirm({ title: `New QR for ${t.name}?`, body: 'The printed QR for this table stops working. Print and replace it.', action: 'Make new QR', run: () => rotate(t.id).unwrap() })}>
+                  <RefreshCw className="h-4 w-4" />
+                </Button>
+                <Button size="icon" variant="ghost" title="Delete" className="hover:text-red-600"
+                  onClick={() => setConfirm({ title: `Delete ${t.name}?`, body: 'Its QR code stops working.', action: 'Delete', run: () => deleteTable(t.id).unwrap() })}>
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+        {!shown.length && <p className="col-span-full text-center text-gray-500 py-10">No tables yet</p>}
+      </div>
 
-      {/* Bulk Add Tables Dialog */}
-      <Dialog open={isBulkAddOpen} onOpenChange={setIsBulkAddOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle className="text-xl font-bold">Bulk Add Tables</DialogTitle>
-            <DialogDescription>
-              Add multiple tables at once. QR codes will be generated automatically for each table.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 pt-2">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1">
-                <Label htmlFor="bulkCount">Number of Tables</Label>
-                <Input
-                  id="bulkCount"
-                  type="number"
-                  min="1"
-                  max="50"
-                  value={bulkTableCount}
-                  onChange={(e) => setBulkTableCount(parseInt(e.target.value) || 1)}
-                  disabled={isBulkSubmitting}
-                />
+      <Dialog open={Boolean(form)} onOpenChange={(o) => !o && setForm(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>{form?.id ? 'Edit table' : 'Add table'}</DialogTitle></DialogHeader>
+          {form && (
+            <div className="space-y-3">
+              <div><Label>Name</Label><Input autoFocus value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} maxLength={20} placeholder="T1" /></div>
+              <div>
+                <Label>Area</Label>
+                <Select value={form.areaId} onValueChange={(v) => setForm({ ...form, areaId: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent><SelectItem value={NONE}>No area</SelectItem>{areas.map((a) => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}</SelectContent>
+                </Select>
               </div>
-              <div className="space-y-1">
-                <Label htmlFor="bulkStart">Starting Number</Label>
-                <Input
-                  id="bulkStart"
-                  type="number"
-                  min="1"
-                  value={bulkStartNumber}
-                  onChange={(e) => setBulkStartNumber(parseInt(e.target.value) || 1)}
-                  disabled={isBulkSubmitting}
-                />
-              </div>
+              <div><Label>Seats</Label><Input inputMode="numeric" value={form.capacity} onChange={(e) => setForm({ ...form, capacity: e.target.value.replace(/\D/g, '') })} /></div>
             </div>
-            <div className="space-y-1">
-              <Label htmlFor="bulkLoc">Location</Label>
-              <Select value={bulkLocation} onValueChange={setBulkLocation} disabled={isBulkSubmitting}>
-                <SelectTrigger id="bulkLoc">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Main Dining">Main Dining</SelectItem>
-                  <SelectItem value="Patio">Patio</SelectItem>
-                  <SelectItem value="Bar">Bar</SelectItem>
-                  <SelectItem value="Private Room">Private Room</SelectItem>
-                  <SelectItem value="Outdoor">Outdoor</SelectItem>
-                  <SelectItem value="VIP">VIP</SelectItem>
-                </SelectContent>
+          )}
+          <DialogFooter><Button onClick={saveTable} disabled={!form?.name.trim() || creatingTable.isLoading}>Save</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={bulkOpen} onOpenChange={setBulkOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Add many tables</DialogTitle></DialogHeader>
+          <div className="grid grid-cols-3 gap-2">
+            <div><Label>Prefix</Label><Input value={bulk.prefix} onChange={(e) => setBulk({ ...bulk, prefix: e.target.value.slice(0, 5) })} /></div>
+            <div><Label>From</Label><Input inputMode="numeric" value={bulk.from} onChange={(e) => setBulk({ ...bulk, from: e.target.value.replace(/\D/g, '') })} /></div>
+            <div><Label>To</Label><Input inputMode="numeric" value={bulk.to} onChange={(e) => setBulk({ ...bulk, to: e.target.value.replace(/\D/g, '') })} /></div>
+            <div className="col-span-2">
+              <Label>Area</Label>
+              <Select value={bulk.areaId} onValueChange={(v) => setBulk({ ...bulk, areaId: v })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent><SelectItem value={NONE}>No area</SelectItem>{areas.map((a) => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}</SelectContent>
               </Select>
             </div>
-            <p className="text-sm text-gray-500">
-              Will add tables numbered {bulkStartNumber} – {bulkStartNumber + bulkTableCount - 1} in {bulkLocation}.
-            </p>
-            <div className="flex gap-3 justify-end pt-2">
-              <Button type="button" variant="outline" onClick={() => setIsBulkAddOpen(false)} disabled={isBulkSubmitting}>
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                onClick={handleBulkAddTables}
-                className="bg-accent hover:bg-accent/90 text-accent-foreground font-bold"
-                disabled={isBulkSubmitting}
-              >
-                {isBulkSubmitting ? 'Adding...' : `Add ${bulkTableCount} Table(s)`}
-              </Button>
-            </div>
+            <div><Label>Seats</Label><Input inputMode="numeric" value={bulk.capacity} onChange={(e) => setBulk({ ...bulk, capacity: e.target.value.replace(/\D/g, '') })} /></div>
           </div>
+          <p className="text-sm text-gray-500">Creates {bulk.prefix}{bulk.from} … {bulk.prefix}{bulk.to}. Names that already exist are skipped.</p>
+          <DialogFooter><Button onClick={createBulk} disabled={creatingTable.isLoading}>{creatingTable.isLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />} Create</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Add Table Dialog */}
-      <Dialog open={isAddTableOpen} onOpenChange={setIsAddTableOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle className="text-xl font-bold">Add New Table</DialogTitle>
-            <DialogDescription>
-              Create a new table for your restaurant. A corresponding QR code will be generated automatically.
-            </DialogDescription>
-          </DialogHeader>
-          <form onSubmit={handleAddTableSubmit} className="space-y-4 pt-2">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1">
-                <Label htmlFor="newTableNumber">Table Number *</Label>
-                <Input
-                  id="newTableNumber"
-                  value={newTableNumber}
-                  onChange={(e) => setNewTableNumber(e.target.value)}
-                  placeholder="e.g., T4, 5"
-                  required
-                  disabled={isSubmittingTable}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="newTableName">Table Name (Optional)</Label>
-                <Input
-                  id="newTableName"
-                  value={newTableName}
-                  onChange={(e) => setNewTableName(e.target.value)}
-                  placeholder="e.g., Garden Table 2"
-                  disabled={isSubmittingTable}
-                />
-              </div>
-            </div>
-
-            <div className="space-y-1">
-              <Label htmlFor="newTableCapacity">Capacity (number of seats)</Label>
-              <Input
-                id="newTableCapacity"
-                type="number"
-                min="1"
-                max="50"
-                value={newTableCapacity}
-                onChange={(e) => setNewTableCapacity(e.target.value)}
-                required
-                disabled={isSubmittingTable}
-              />
-            </div>
-
-            <div className="space-y-1">
-              <Label htmlFor="newTableLocation">Location</Label>
-              <Select value={newTableLocation} onValueChange={setNewTableLocation} disabled={isSubmittingTable}>
-                <SelectTrigger id="newTableLocation">
-                  <SelectValue placeholder="Select location" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Main Dining">Main Dining</SelectItem>
-                  <SelectItem value="Patio">Patio</SelectItem>
-                  <SelectItem value="Bar">Bar</SelectItem>
-                  <SelectItem value="Private Room">Private Room</SelectItem>
-                  <SelectItem value="Outdoor">Outdoor</SelectItem>
-                  <SelectItem value="VIP">VIP</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="flex items-center justify-between py-2 border-t border-b">
-              <div className="space-y-0.5">
-                <Label htmlFor="newTableActive" className="text-sm font-semibold">Active Status</Label>
-                <p className="text-[10px] text-gray-500">Enable or disable ordering from this table.</p>
-              </div>
-              <Switch
-                id="newTableActive"
-                checked={newTableActive}
-                onCheckedChange={setNewTableActive}
-                disabled={isSubmittingTable}
-              />
-            </div>
-
-            <div className="flex gap-3 justify-end pt-2">
-              <Button type="button" variant="outline" onClick={() => setIsAddTableOpen(false)} disabled={isSubmittingTable}>
-                Cancel
-              </Button>
-              <Button type="submit" className="bg-accent hover:bg-accent/90 text-accent-foreground font-bold" disabled={isSubmittingTable}>
-                {isSubmittingTable ? 'Adding...' : 'Add Table'}
-              </Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* Delete Confirmation Dialog */}
-      <Dialog open={isDeleteOpen} onOpenChange={setIsDeleteOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle className="text-xl font-bold flex items-center gap-2 text-red-600">
-              <Trash2 className="h-5 w-5" />
-              Confirm Deletion
-            </DialogTitle>
-            <DialogDescription className="pt-2">
-              Are you sure you want to delete the QR code for <strong className="text-gray-900">"{qrToDelete?.name}"</strong>?
-              {qrToDelete?.type === 'table' && (
-                <span className="block mt-2 text-red-500 font-medium">
-                  Warning: This will also permanently delete the associated table from your restaurant.
-                </span>
-              )}
-              {qrToDelete?.type === 'general' && (
-                <span className="block mt-2 text-red-500 font-medium">
-                  Warning: This is your general menu QR code.
-                </span>
-              )}
-              This action cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex gap-3 justify-end pt-4">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setIsDeleteOpen(false)}
-              disabled={isDeleting}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              onClick={handleConfirmDelete}
-              className="bg-red-600 hover:bg-red-700 text-white font-bold"
-              disabled={isDeleting}
-            >
-              {isDeleting ? 'Deleting...' : 'Delete'}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <AlertDialog open={Boolean(confirm)} onOpenChange={(o) => !o && setConfirm(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader><AlertDialogTitle>{confirm?.title}</AlertDialogTitle><AlertDialogDescription>{confirm?.body}</AlertDialogDescription></AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => confirm?.run().catch(toastError)}>{confirm?.action}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

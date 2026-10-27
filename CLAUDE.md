@@ -1,123 +1,62 @@
-# CLAUDE.md — MenuTech Frontend
+# CLAUDE.md
 
-This file gives Claude Code the context needed to work effectively in this codebase. Read it before making changes.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
----
+## What this is
 
-## What This Project Is
+ServeKaro frontend: a React 18 + TypeScript + Vite SPA (shadcn/ui, Tailwind) for a restaurant QR menu, ordering and POS platform. Two audiences:
 
-A React/TypeScript SPA for a restaurant digital menu platform. Two audiences:
+- **Customers**: scan a table QR → `/menu/:restaurantId/:tableId` → browse, add to cart, place order → track it on `/my-orders`
+- **Staff** (`/admin/*`, behind `ProtectedRoute`): dashboard, live tables, kitchen display, order taking + billing, menu management, waiters, QR codes, analytics, settings (settings requires `role === 'admin'`)
 
-1. **Customers** — scan a QR code → browse the menu → add items to cart → checkout
-2. **Restaurant admins** — manage menu items, tables, QR codes, view orders
+The current backend is an ASP.NET Core API at `http://menubackend.runasp.net` (free hosting, cold-starts slowly; wait ~30s and refresh if the first request times out). A replacement NestJS backend is being built in the separate `ServeKaro-Backend` repo, so keep the API contract centralised (see below) rather than spreading URLs across components.
 
-Backend: ASP.NET Core at `http://menubackend.runasp.net/api`. It may be unreachable (free hosting sleeps). All public menu endpoints (`/Menu/*`) are the only ones currently integrated.
+## Commands
 
----
+```bash
+npm install
+npm run dev        # http://localhost:8080 (vite.config.ts sets port 8080, host "::")
+npm run build
+npm run build:dev  # development-mode build
+npm run lint       # eslint .
+npm run preview
+```
 
-## Architecture Decisions
+There is no test runner configured. `package-lock.json`, `yarn.lock` and `bun.lockb` all exist; use npm and don't regenerate the others.
 
-### Two API Layers (don't consolidate without discussion)
-There are intentionally two HTTP layers:
+Useful URLs in dev: `/menu/bella-vista`, `/menu/bella-vista/1` (with table), `/admin/login`.
 
-| Layer | File | Used for |
+## API wiring
+
+`VITE_API_BASE_URL` is `/api` (in `.env`). Requests stay same-origin and are proxied to the backend: by Vite's dev proxy (`/api` and the `/orderHub` websocket) and by `vercel.json` rewrites in production. Change the backend target in **both** places.
+
+There are two HTTP layers, intentionally:
+
+| Layer | Files | Used for |
 |---|---|---|
-| RTK Query | `src/store/api.ts` + `src/store/menuApi.ts` | Customer menu pages — categories, items, search |
-| fetch wrapper | `src/services/api.ts` + `src/services/apiService.ts` | Auth, restaurants, orders, reviews |
+| RTK Query | `src/store/api.ts` (base slice), `src/store/menuApi.ts` (`injectEndpoints`) | Menu categories/items: queries for the customer menu, mutations for admin menu management |
+| fetch wrapper | `src/services/api.ts` (`api.get/post/upload…`), `src/services/apiService.ts` (`authApi`, `settingsApi`, `menuApi`, `tableApi`, `orderApi`, `reviewApi`, `analyticsApi`, `publicMenuApi`) | Everything else |
 
-`src/services/endpoints.ts` centralises all URL strings for the fetch layer. Always update it when adding new endpoints to that layer.
+- URL strings for the fetch layer live in `src/services/endpoints.ts`; add new ones there.
+- Both layers read the JWT from `localStorage.authToken` and, on 401, clear it and redirect to `/admin/login` only when on an `/admin` path (customer pages must not redirect).
+- `api.ts` tolerates empty/plain-text success bodies (the backend returns strings like "Settings updated successfully").
+- The backend expects `CategoryID` (capital ID) as the items query param, not `categoryId`.
+- `apiService.ts` and the contexts use `any` freely; TS `strict` and `noImplicitAny` are off.
 
-### Context vs Redux
-- **Redux/RTK Query** — server data (menu items, categories) with caching
-- **React Context** — client state (cart, auth session, current restaurant, active orders)
-- Do not move Context state into Redux or vice versa without good reason
+## State and data flow
 
-### OrdersContext — localStorage + cross-tab sync
-`src/contexts/OrdersContext.tsx` stores active table orders in localStorage and syncs across tabs via the `storage` event. This is intentional — it lets the customer-facing menu tab and the admin order dashboard tab see the same orders in real-time without a WebSocket.
+Provider order in `src/App.tsx`: Redux `Provider` → `AuthProvider` → `OrdersProvider` → `SearchProvider` → `RestaurantProvider` → `MenuProvider` → `CartProvider` → `BrowserRouter`. Providers can only use contexts above them (e.g. `OrdersProvider` uses `useAuth`). `CartSidebar` and `FloatingCartButton` are rendered globally inside `BrowserRouter`, and `CheckoutModal` derives `tableId` from the URL path.
 
----
+- **AuthContext**: real login via `authApi.login`; user cached in `localStorage.restaurantUser` with an 8-hour expiry (`loginTime`). Roles: `admin` | `manager`; waiters/staff are created via `/Auth/create-waiter`.
+- **RestaurantContext**: the backend is effectively **single-restaurant**. `settingsApi.get()` (`/Settings`) supplies the one restaurant, with id hard-coded to `'restaurant-001'` (also used in `OrdersContext` and `apiService`). It falls back to a local "Bella Vista" if the call fails. The `:restaurantId` slug in menu URLs is resolved against this list.
+- **OrdersContext**: active orders come from `orderApi.getOrders()` when authenticated, plus live updates from SignalR (`src/hooks/useOrderHub.ts`: `ReceiveNewOrder`, `ReceiveStatusUpdate`, invokes `JoinAdminGroup`). `submitOrder` POSTs a `PlaceOrderDTO` (`tableId` numeric or `null` for takeaway). Statuses are lower-cased from the backend's `Pending/Preparing/Ready/…`; `completed`/`cancelled` are dropped from active orders. A client-only `browsing` status marks a table that has a cart open. `customerOrders` (shown on `/my-orders`) is plain in-memory state: not persisted, and only updated by the hub, which connects only for authenticated staff.
+- **MenuContext**: wraps the RTK Query menu data in a local-shape `MenuItem` for older components (`CartSidebar`, `OrderTakingDashboard`, `AdminDashboard`, etc.).
+- **SalesAnalytics** builds its Recharts charts client-side from `useOrders()` data (not from `analyticsApi`).
 
-## Key Files
+### API item → `MenuCard` mapping
 
-| File | Purpose |
-|---|---|
-| `src/App.tsx` | Provider tree + route definitions. `CartSidebar` must stay inside `BrowserRouter` (uses `useParams` via `CheckoutModal`) |
-| `src/store/menuApi.ts` | RTK Query endpoints. `CategoryID` (capital ID) is required by the backend — not `categoryId` |
-| `src/contexts/RestaurantContext.tsx` | Hardcoded demo restaurants (Bella Vista, Golden Dragon) + tables. `loadRestaurantBySlug` sets `currentRestaurant` in context AND returns the restaurant |
-| `src/contexts/AuthContext.tsx` | Demo-mode auth. Credentials hardcoded. No real API called |
-| `src/pages/RestaurantMenu.tsx` | Main customer page. Reads categories + items via RTK Query. Search uses `useSearchMenuItemsQuery` with `skip` option |
-| `src/pages/admin/OrderTakingDashboard.tsx` | Admin order flow. Orders submitted locally only (`// TODO: Send to API` at line 147) |
-| `src/components/customer/CheckoutModal.tsx` | Checkout form. Order is simulated (setTimeout). No API call |
-| `src/index.css` | Defines `pill-button`, `pill-button-active`, `glass-card` custom classes |
+API `MenuItem` and `MenuContext.MenuItem` differ. When passing an API item to `<MenuCard>`:
 
----
-
-## What's Real vs Mocked
-
-### Hits the Backend
-- `GET /Menu/categories` — fetched on every menu page load
-- `GET /Menu/items?CategoryID=N` — fetched per category section
-- `GET /Menu/items/search?q=` — fired when search query >= 2 chars
-- `GET /Menu/items/:id`, `GET /Menu/items/featured` — available but rarely called
-
-### Fully Mocked / Not Wired
-- Auth — hardcoded demo credentials in `AuthContext`
-- Restaurant data — hardcoded in `RestaurantContext` (Bella Vista, Golden Dragon)
-- Orders — localStorage only
-- Admin settings save — UI only, no API call
-- Analytics stats — random/hardcoded numbers
-- Image uploads — UI only, `<input type="file">` with no handler
-- Notifications — placeholder
-- Reviews — simulated with setTimeout
-- QR scan tracking — random numbers
-
----
-
-## Incomplete Pages (don't waste time polishing internals)
-
-| Page | Status |
-|---|---|
-| `SalesAnalytics.tsx` | Returns null — completely empty stub |
-| `About.tsx` | Hardcoded to "Bella Vista" — needs restaurant context wiring |
-| `Footer.tsx` | Hardcoded to "Bella Vista" — needs restaurant context wiring |
-| `Header.tsx` | Restaurant name hardcoded — needs restaurant context |
-| `MobileSidebar.tsx` | Hardcoded content |
-| `PromotionalBanner.tsx` | 3 hardcoded promotions, no admin management |
-| `TrendingSection.tsx` | Views/likes are random numbers |
-| `RestaurantReviewSection.tsx` | 4.8 rating and all reviews are hardcoded fallback |
-
----
-
-## Patterns in Use
-
-### Adding a New RTK Query Endpoint
-1. Add the endpoint in `src/store/menuApi.ts` using `api.injectEndpoints`
-2. Export the hook
-3. Call the hook in the component with `{ skip: condition }` if conditional
-
-### Adding a New Page
-1. Create in `src/pages/`
-2. Add the route in `src/App.tsx`
-3. If admin-only, wrap with `<ProtectedRoute>` and nest under the `/admin` parent route
-
-### Toast Notifications
-Use `toast` from `sonner` (already installed). Never use `alert()` or `window.confirm()`.
-```tsx
-import { toast } from 'sonner';
-toast.success('Done!');
-toast.error('Something failed.');
-```
-
-### Tax Rate
-Always read from restaurant settings — never hardcode a number:
-```tsx
-const { currentRestaurant } = useRestaurant();
-const taxRate = (currentRestaurant?.settings.taxRate ?? 8.5) / 100;
-```
-`settings.taxRate` is stored as a percentage (e.g. `8.75` = 8.75%), so divide by 100 to get the multiplier.
-
-### Menu Item Mapping (RestaurantMenu + OrderTakingDashboard)
-The API `MenuItem` shape differs from the `MenuContext.MenuItem` shape. When passing an API item to `<MenuCard>`, map the fields:
 ```tsx
 item={{
   ...item,
@@ -129,58 +68,15 @@ item={{
 }}
 ```
 
----
+### Tax
 
-## TypeScript Notes
+Read the rate from `currentRestaurant?.settings.taxRate` (a percentage, so divide by 100). Don't hard-code it in components. `RestaurantContext` currently sets it to `8.75` because `/Settings` doesn't return one yet.
 
-- Strict mode is NOT enabled. Many components use `any` for API responses in `apiService.ts`.
-- `CategorySection` in `RestaurantMenu.tsx` must be typed: `{ category: { categoryId: number; categoryName: string } }`
-- The backend uses `CategoryID` (capital ID) as a query param — see `menuApi.ts` line 76
+## Conventions
 
----
-
-## CSS / Styling
-
-- Tailwind CSS with shadcn/ui component library
-- Custom utility classes in `src/index.css`:
-  - `.pill-button` — rounded category filter button
-  - `.pill-button-active` — selected state for pill buttons
-  - `.glass-card` — semi-transparent card used in MenuCard
-  - `.scrollbar-hide` — hides scrollbar while keeping scroll functionality
-- Do not add inline styles. Use Tailwind classes.
-- The colour palette is CSS variable–driven (defined in `index.css`) — use `text-foreground`, `bg-background`, `text-primary`, etc., not hardcoded hex values.
-
----
-
-## Missing Features (Backlog)
-
-High priority gaps to implement:
-
-1. **SalesAnalytics page** — wire up Recharts with real order data
-2. **Order API integration** — `OrderTakingDashboard` and `CheckoutModal` need to POST orders to backend
-3. **Image upload** — `RestaurantSignUp` Step 3 and `AdminSettings` branding section
-4. **MenuManagement edit/delete** — `EditItemModal` save + delete/toggle API calls
-5. **AdminSettings save** — PUT to `/restaurants/:id/settings` and `/restaurants/:id`
-6. **Dynamic Header/Footer/About** — replace hardcoded "Bella Vista" with `currentRestaurant` from context
-7. **PromotionalBanner admin** — add promotion management to AdminSettings
-8. **Real auth** — replace demo credentials with actual `/auth/login` API call
-9. **Pagination** — MenuManagement item list needs it for large menus
-10. **Error boundaries** — no error boundaries exist; unhandled promise rejections will crash pages silently
-
----
-
-## Running Locally
-
-```bash
-yarn install
-yarn dev       # http://localhost:5173
-yarn build     # production build
-yarn preview   # serve the production build locally
-```
-
-If the backend is sleeping (first request times out), wait ~30s and refresh — somee.com free hosting cold-starts slowly.
-
-Test URLs after `yarn dev`:
-- Customer menu: `http://localhost:5173/menu/bella-vista`
-- Customer menu with table: `http://localhost:5173/menu/bella-vista/1`
-- Admin login: `http://localhost:5173/admin/login`
+- New pages go in `src/pages/` (customer) or `src/pages/admin/` and get a route in `App.tsx`; admin pages nest under the `/admin` route so they inherit `ProtectedRoute` + `AdminLayout`.
+- Notifications: `toast` from `sonner`. Don't use `alert()`/`window.confirm()`.
+- Styling: Tailwind with CSS-variable colours (`bg-background`, `text-primary`, `text-accent`…; tokens in `src/index.css` and `src/styles/colors.css`). No hex values or inline styles. Custom classes in `index.css`: `pill-button`, `pill-button-active`, `glass-card`, `scrollbar-hide`.
+- `src/components/ui/` is generated shadcn/ui code (`components.json`); add components with the shadcn CLI rather than hand-writing them.
+- Import via the `@/` alias (→ `src/`).
+- `MenuBackend API.postman_collection.json` documents the current backend endpoints.

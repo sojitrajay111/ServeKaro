@@ -1,469 +1,145 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
+import { ArrowLeft, Building2, CheckCircle, ChefHat, Loader2, User } from 'lucide-react';
+import { toast } from 'sonner';
 import SEO from '@/components/SEO';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Textarea } from '@/components/ui/textarea';
-import { Badge } from '@/components/ui/badge';
-import { 
-  ArrowLeft, 
-  CheckCircle, 
-  Upload, 
-  Building2, 
-  MapPin, 
-  Phone, 
-  Mail, 
-  Globe,
-  ChefHat,
-  Star,
-  Users,
-  Clock,
-  Shield
-} from 'lucide-react';
-import { useRestaurant } from '@/contexts/RestaurantContext';
-import { authApi } from '@/services/apiService';
+import { FieldError, FormError } from '@/components/AuthShell';
+import { useSignupMutation } from '@/store/endpoints/auth';
+import { isApiError } from '@/lib/apiError';
+
+const schema = z.object({
+  restaurantName: z.string().trim().min(2, 'Enter the restaurant name').max(80),
+  outletName: z.string().trim().min(2, 'Enter the outlet name').max(80),
+  city: z.string().trim().min(2, 'Enter the city').max(60),
+  ownerName: z.string().trim().min(2, 'Enter your name').max(80),
+  email: z.string().trim().email('Enter a valid email'),
+  phone: z.string().trim().refine((v) => /^(\+?91)?0?[6-9]\d{9}$/.test(v.replace(/[\s-]/g, '')), 'Enter a 10-digit mobile number'),
+  password: z.string().min(8, 'At least 8 characters').max(100),
+  confirm: z.string(),
+}).refine((d) => d.password === d.confirm, { message: 'Passwords do not match', path: ['confirm'] });
+
+type Form = z.infer<typeof schema>;
+const STEP_FIELDS: (keyof Form)[][] = [
+  ['restaurantName', 'outletName', 'city'],
+  ['ownerName', 'email', 'phone', 'password', 'confirm'],
+];
 
 const RestaurantSignUp = () => {
   const navigate = useNavigate();
-  const { addRestaurant } = useRestaurant();
-  
-  const [currentStep, setCurrentStep] = useState(1);
-  const [isLoading, setIsLoading] = useState(false);
-  const [formData, setFormData] = useState({
-    // Basic Info
-    name: '',
-    description: '',
-    cuisine: '',
-    priceRange: '' as 'budget' | 'moderate' | 'expensive' | 'luxury' | '',
-    phone: '',
-    email: '',
-    website: '',
-    
-    // Address
-    address: '',
-    city: '',
-    state: '',
-    zipCode: '',
-    country: 'United States',
-    
-    // Branding
-    logo: '',
-    coverImage: '',
-    
-    // Settings
-    allowOnlineOrdering: true,
-    requireCustomerInfo: false,
-    showNutritionalInfo: false,
-    enableReviews: true,
-    enableWaitlist: false,
-    orderPreparationTime: 20,
-    minimumOrderAmount: 10.00,
-    deliveryFee: 0,
-    serviceFee: 0,
-    taxRate: 8.75,
-    currency: 'USD',
-    timezone: 'America/New_York',
-    language: 'en'
+  const [step, setStep] = useState(0);
+  const [formError, setFormError] = useState('');
+  const [signup, { isLoading }] = useSignupMutation();
+
+  const { register, handleSubmit, trigger, setValue, getValues, setError, formState: { errors } } = useForm<Form>({
+    resolver: zodResolver(schema),
+    defaultValues: { restaurantName: '', outletName: '', city: '', ownerName: '', email: '', phone: '', password: '', confirm: '' },
   });
 
-  const [errors, setErrors] = useState<Record<string, string>>({});
-
-  const steps = [
-    { number: 1, title: 'Basic Information', description: 'Tell us about your restaurant' },
-    { number: 2, title: 'Location & Contact', description: 'Where can customers find you?' },
-    { number: 3, title: 'Review', description: 'Review and create your account' }
-  ];
-
-  const handleInputChange = (field: string, value: any) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
-    // Clear error when user starts typing
-    if (errors[field]) {
-      setErrors(prev => ({ ...prev, [field]: '' }));
+  const next = async () => {
+    if (await trigger(STEP_FIELDS[0])) {
+      if (!getValues('outletName')) setValue('outletName', getValues('restaurantName'));
+      setStep(1);
     }
   };
 
-  const validateStep = (step: number) => {
-    const newErrors: Record<string, string> = {};
-    
-    switch (step) {
-      case 1:
-        if (!formData.name.trim()) newErrors.name = 'Restaurant name is required';
-        if (!formData.description.trim()) newErrors.description = 'Description is required';
-        break;
-      case 2:
-        if (!formData.phone.trim()) newErrors.phone = 'Phone number is required';
-        if (!formData.email.trim()) newErrors.email = 'Email is required';
-        if (!formData.address.trim()) newErrors.address = 'Address is required';
-        if (!formData.city.trim()) newErrors.city = 'City is required';
-        if (!formData.state.trim()) newErrors.state = 'State is required';
-        if (!formData.zipCode.trim()) newErrors.zipCode = 'ZIP code is required';
-        break;
-      case 3:
-        // Review step has no manual validation
-        break;
-    }
-    
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  };
-
-  const handleNext = () => {
-    if (validateStep(currentStep)) {
-      setCurrentStep(prev => Math.min(prev + 1, steps.length));
-    }
-  };
-
-  const handlePrevious = () => {
-    setCurrentStep(prev => Math.max(prev - 1, 1));
-  };
-
-  const handleSubmit = async () => {
-    if (!validateStep(3)) return;
-    
-    setIsLoading(true);
-    
+  const onSubmit = async ({ confirm: _confirm, ...data }: Form) => {
+    setFormError('');
     try {
-      // 1. Call the backend POST /api/Auth/signup endpoint
-      await authApi.register({
-        name: formData.name,
-        email: formData.email,
-        password: 'password123',
-        restaurantName: formData.name
-      });
-
-      // 2. Create the restaurant locally in application context
-      const restaurant = addRestaurant({
-        name: formData.name,
-        description: formData.description,
-        cuisine: 'International',
-        priceRange: 'moderate',
-        phone: formData.phone,
-        email: formData.email,
-        website: '',
-        address: `${formData.address}, ${formData.city}, ${formData.state} ${formData.zipCode}, ${formData.country}`,
-        logo: 'https://images.unsplash.com/photo-1551218808-94e220e084d2?w=100&h=100&fit=crop&crop=center',
-        coverImage: 'https://images.unsplash.com/photo-1551218808-94e220e084d2?w=1920&h=1080&fit=crop&crop=center',
-        settings: {
-          allowOnlineOrdering: true,
-          requireCustomerInfo: false,
-          showNutritionalInfo: false,
-          enableReviews: true,
-          enableWaitlist: false,
-          orderPreparationTime: 20,
-          minimumOrderAmount: 10.00,
-          deliveryFee: 0,
-          serviceFee: 0,
-          taxRate: 8.75,
-          currency: 'USD',
-          timezone: 'America/New_York',
-          language: 'en'
-        }
-      });
-      
-      // Redirect to restaurant dashboard
-      if (restaurant) {
-        navigate(`/admin?restaurant=${restaurant.slug}`);
+      await signup(data).unwrap();
+      toast.success('Your restaurant is ready. Add your GSTIN and menu next.');
+      navigate('/admin/settings');
+    } catch (err) {
+      if (isApiError(err) && err.errors) {
+        Object.entries(err.errors).forEach(([field, [msg]]) => setError(field as keyof Form, { message: msg }));
+        if (STEP_FIELDS[0].some((f) => err.errors?.[f])) setStep(0);
+      } else {
+        setFormError(isApiError(err) && err.code === 'DUPLICATE' ? 'An account with this email or phone already exists. Try logging in.' : isApiError(err) ? err.message : 'Signup failed');
       }
-      
-    } catch (error) {
-      console.error('Error creating restaurant:', error);
-      setErrors(prev => ({ ...prev, submit: (error as any)?.message || 'Failed to sign up. Please try again.' }));
-    } finally {
-      setIsLoading(false);
     }
   };
 
-  const renderStepContent = () => {
-    switch (currentStep) {
-      case 1:
-        return (
-          <div className="space-y-6">
-            <div>
-              <Label htmlFor="name">Restaurant Name *</Label>
-              <Input
-                id="name"
-                value={formData.name}
-                onChange={(e) => handleInputChange('name', e.target.value)}
-                placeholder="e.g., Bella Vista"
-                className={errors.name ? 'border-red-500' : ''}
-              />
-              {errors.name && <p className="text-red-500 text-sm mt-1">{errors.name}</p>}
-            </div>
-            
-            <div>
-              <Label htmlFor="description">Description *</Label>
-              <Textarea
-                id="description"
-                value={formData.description}
-                onChange={(e) => handleInputChange('description', e.target.value)}
-                placeholder="Tell customers about your restaurant..."
-                className={errors.description ? 'border-red-500' : ''}
-                rows={3}
-              />
-              {errors.description && <p className="text-red-500 text-sm mt-1">{errors.description}</p>}
-            </div>
-          </div>
-        );
-        
-      case 2:
-        return (
-          <div className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <Label htmlFor="phone">Phone Number *</Label>
-                <Input
-                  id="phone"
-                  value={formData.phone}
-                  onChange={(e) => handleInputChange('phone', e.target.value)}
-                  placeholder="+1 (555) 123-4567"
-                  className={errors.phone ? 'border-red-500' : ''}
-                />
-                {errors.phone && <p className="text-red-500 text-sm mt-1">{errors.phone}</p>}
-              </div>
-              
-              <div>
-                <Label htmlFor="email">Email Address *</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => handleInputChange('email', e.target.value)}
-                  placeholder="info@yourrestaurant.com"
-                  className={errors.email ? 'border-red-500' : ''}
-                />
-                {errors.email && <p className="text-red-500 text-sm mt-1">{errors.email}</p>}
-              </div>
-            </div>
-            
-            <div>
-              <Label htmlFor="address">Street Address *</Label>
-              <Input
-                id="address"
-                value={formData.address}
-                onChange={(e) => handleInputChange('address', e.target.value)}
-                placeholder="123 Main Street"
-                className={errors.address ? 'border-red-500' : ''}
-              />
-              {errors.address && <p className="text-red-500 text-sm mt-1">{errors.address}</p>}
-            </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <Label htmlFor="city">City *</Label>
-                <Input
-                  id="city"
-                  value={formData.city}
-                  onChange={(e) => handleInputChange('city', e.target.value)}
-                  placeholder="New York"
-                  className={errors.city ? 'border-red-500' : ''}
-                />
-                {errors.city && <p className="text-red-500 text-sm mt-1">{errors.city}</p>}
-              </div>
-              
-              <div>
-                <Label htmlFor="state">State *</Label>
-                <Input
-                  id="state"
-                  value={formData.state}
-                  onChange={(e) => handleInputChange('state', e.target.value)}
-                  placeholder="NY"
-                  className={errors.state ? 'border-red-500' : ''}
-                />
-                {errors.state && <p className="text-red-500 text-sm mt-1">{errors.state}</p>}
-              </div>
-              
-              <div>
-                <Label htmlFor="zipCode">ZIP Code *</Label>
-                <Input
-                  id="zipCode"
-                  value={formData.zipCode}
-                  onChange={(e) => handleInputChange('zipCode', e.target.value)}
-                  placeholder="10001"
-                  className={errors.zipCode ? 'border-red-500' : ''}
-                />
-                {errors.zipCode && <p className="text-red-500 text-sm mt-1">{errors.zipCode}</p>}
-              </div>
-            </div>
-          </div>
-        );
-        
-      case 3:
-        return (
-          <div className="space-y-6">
-            <div className="text-center mb-6">
-              <CheckCircle className="w-16 h-16 text-green-500 mx-auto mb-4" />
-              <h3 className="text-2xl font-bold text-gray-900 mb-2">Review Your Information</h3>
-              <p className="text-gray-600">Please review your restaurant details before creating your account.</p>
-            </div>
-            
-            <div className="bg-gray-50 p-6 rounded-lg space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <h4 className="font-semibold text-gray-900">Restaurant Name</h4>
-                  <p className="text-gray-600">{formData.name}</p>
-                </div>
-                <div>
-                  <h4 className="font-semibold text-gray-900">Phone</h4>
-                  <p className="text-gray-600">{formData.phone}</p>
-                </div>
-                <div>
-                  <h4 className="font-semibold text-gray-900">Email</h4>
-                  <p className="text-gray-600">{formData.email}</p>
-                </div>
-                <div>
-                  <h4 className="font-semibold text-gray-900">Address</h4>
-                  <p className="text-gray-600">{formData.address}, {formData.city}, {formData.state} {formData.zipCode}</p>
-                </div>
-              </div>
-              
-              <div>
-                <h4 className="font-semibold text-gray-900">Description</h4>
-                <p className="text-gray-600">{formData.description}</p>
-              </div>
-            </div>
-            
-            <div className="bg-blue-50 p-4 rounded-lg">
-              <p className="text-sm text-blue-800">
-                <strong>Ready to get started?</strong> Click "Create Restaurant" to set up your account and start building your digital menu.
-              </p>
-            </div>
-          </div>
-        );
-        
-      default:
-        return null;
-    }
-  };
+  const field = (name: keyof Form, label: string, props: React.ComponentProps<typeof Input> = {}) => (
+    <div>
+      <Label htmlFor={name}>{label}</Label>
+      <Input id={name} className="mt-1" {...register(name)} {...props} />
+      <FieldError>{errors[name]?.message}</FieldError>
+    </div>
+  );
 
   return (
     <>
-      <SEO
-        title="Restaurant Sign Up - Join ServeKaro Platform"
-        description="Sign up for ServeKaro and transform your restaurant with digital menus and QR code ordering. Start your free trial today and reduce wait times by 70%."
-        keywords="restaurant sign up, digital menu platform, QR code ordering, restaurant registration, free trial, restaurant technology"
-        url="https://servekaro.com/signup"
-      />
-      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50">
-      {/* Header */}
-      <div className="bg-white border-b border-gray-200">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2">
-              <Button variant="ghost" size="sm" onClick={() => navigate('/')}>
-                <ArrowLeft className="w-4 h-4 mr-2" />
-                Back to Home
-              </Button>
-            </div>
-            <div className="flex items-center space-x-2">
-              <div className="w-8 h-8 bg-gradient-to-r from-blue-600 to-purple-600 rounded-lg flex items-center justify-center">
-                <ChefHat className="w-5 h-5 text-white" />
-              </div>
-              <span className="text-xl font-bold text-gray-900">ServeKaro</span>
-            </div>
-          </div>
-        </div>
-      </div>
+      <SEO title="Create your restaurant - ServeKaro" description="Set up QR ordering, KOTs and GST billing for your restaurant in minutes." url="https://servekaro.com/signup" />
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 py-8 px-3">
+        <div className="max-w-lg mx-auto">
+          <Link to="/" className="inline-flex items-center text-sm text-gray-600 hover:text-gray-900 mb-6"><ArrowLeft className="h-4 w-4 mr-1" /> Back</Link>
 
-      <div className="container mx-auto px-3 sm:px-4 py-6 sm:py-8 max-w-4xl">
-        {/* Progress Steps */}
-        <div className="mb-6 sm:mb-8">
-          <div className="flex items-center justify-center space-x-2 sm:space-x-4 mb-4">
-            {steps.map((step, index) => (
-              <React.Fragment key={step.number}>
-                <div className="flex items-center space-x-2">
-                  <div className={`flex items-center justify-center w-8 h-8 sm:w-10 sm:h-10 rounded-full border-2 font-semibold text-xs sm:text-sm ${
-                    currentStep >= step.number
-                      ? 'bg-blue-600 border-blue-600 text-white'
-                      : 'border-gray-300 text-gray-500 bg-white'
-                  }`}>
-                    {currentStep > step.number ? (
-                      <CheckCircle className="w-4 h-4 sm:w-5 sm:h-5" />
-                    ) : (
-                      step.number
-                    )}
-                  </div>
-                  <span className={`hidden sm:inline text-xs sm:text-sm font-medium ${
-                    currentStep >= step.number ? 'text-gray-900 font-semibold' : 'text-gray-400'
-                  }`}>
-                    {step.title}
-                  </span>
+          <div className="text-center mb-6">
+            <div className="inline-flex items-center justify-center w-14 h-14 bg-blue-600 rounded-full mb-3"><ChefHat className="h-7 w-7 text-white" /></div>
+            <h1 className="text-3xl font-bold text-gray-900">Start with ServeKaro</h1>
+            <p className="text-gray-600 mt-1">QR ordering, KOTs and GST billing in one place</p>
+          </div>
+
+          <div className="flex items-center justify-center gap-3 mb-6">
+            {['Restaurant', 'Your account'].map((t, i) => (
+              <div key={t} className="flex items-center gap-2">
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold ${i <= step ? 'bg-blue-600 text-white' : 'bg-white text-gray-400 border'}`}>
+                  {i < step ? <CheckCircle className="h-5 w-5" /> : i + 1}
                 </div>
-                {index < steps.length - 1 && (
-                  <div className={`h-0.5 w-6 sm:w-12 md:w-20 ${
-                    currentStep > step.number ? 'bg-blue-600' : 'bg-gray-300'
-                  }`} />
-                )}
-              </React.Fragment>
+                <span className={`text-sm ${i === step ? 'font-semibold text-gray-900' : 'text-gray-500'}`}>{t}</span>
+                {i === 0 && <div className="w-10 h-px bg-gray-300" />}
+              </div>
             ))}
           </div>
-          
-          <div className="text-center">
-            <p className="text-xs sm:text-sm text-gray-500 mt-1">
-              {steps[currentStep - 1].description}
-            </p>
-          </div>
+
+          <motion.div key={step} initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}>
+            <Card className="shadow-lg border-0">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  {step === 0 ? <><Building2 className="h-5 w-5 text-blue-600" /> About your restaurant</> : <><User className="h-5 w-5 text-blue-600" /> Owner account</>}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+                  {step === 0 ? (
+                    <>
+                      {field('restaurantName', 'Restaurant / brand name', { placeholder: 'Spice Route', autoFocus: true })}
+                      {field('outletName', 'Outlet name', { placeholder: 'Spice Route – SG Highway' })}
+                      {field('city', 'City', { placeholder: 'Ahmedabad' })}
+                      <Button type="button" className="w-full" onClick={next}>Continue</Button>
+                    </>
+                  ) : (
+                    <>
+                      {field('ownerName', 'Your name', { autoFocus: true, autoComplete: 'name' })}
+                      {field('email', 'Email', { type: 'email', autoComplete: 'email' })}
+                      {field('phone', 'Mobile number', { type: 'tel', autoComplete: 'tel', placeholder: '98765 43210' })}
+                      {field('password', 'Password', { type: 'password', autoComplete: 'new-password' })}
+                      {field('confirm', 'Confirm password', { type: 'password', autoComplete: 'new-password' })}
+                      <FormError>{formError}</FormError>
+                      <div className="flex gap-2">
+                        <Button type="button" variant="outline" onClick={() => setStep(0)}>Back</Button>
+                        <Button type="submit" className="flex-1" disabled={isLoading}>
+                          {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Create restaurant
+                        </Button>
+                      </div>
+                    </>
+                  )}
+                </form>
+              </CardContent>
+            </Card>
+          </motion.div>
+
+          <p className="text-center text-sm text-gray-600 mt-4">
+            Already have an account? <Link to="/admin/login" className="text-blue-600 font-medium hover:underline">Log in</Link>
+          </p>
         </div>
-
-        {/* Form Content */}
-        <Card>
-          <CardContent className="p-4 sm:p-6 lg:p-8">
-            <motion.div
-              key={currentStep}
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ duration: 0.3 }}
-            >
-              {renderStepContent()}
-            </motion.div>
-          </CardContent>
-        </Card>
-
-        {errors.submit && (
-          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-md mt-6 text-sm">
-            {errors.submit}
-          </div>
-        )}
-
-        {/* Navigation Buttons */}
-        <div className="flex flex-col sm:flex-row justify-between gap-3 sm:gap-0 mt-6 sm:mt-8">
-          <Button
-            variant="outline"
-            onClick={handlePrevious}
-            disabled={currentStep === 1}
-            className="w-full sm:w-auto order-2 sm:order-1"
-          >
-            Previous
-          </Button>
-          
-          {currentStep < steps.length ? (
-            <Button onClick={handleNext} className="w-full sm:w-auto order-1 sm:order-2">
-              Next
-            </Button>
-          ) : (
-            <Button 
-              onClick={handleSubmit}
-              disabled={isLoading}
-              className="bg-green-600 hover:bg-green-700 w-full sm:w-auto order-1 sm:order-2"
-            >
-              {isLoading ? (
-                <>
-                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
-                  Creating Restaurant...
-                </>
-              ) : (
-                <>
-                  <CheckCircle className="w-4 h-4 mr-2" />
-                  Create Restaurant
-                </>
-              )}
-            </Button>
-          )}
-        </div>
-      </div>
       </div>
     </>
   );

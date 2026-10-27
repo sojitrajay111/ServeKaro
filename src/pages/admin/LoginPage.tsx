@@ -15,49 +15,39 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { useAuth } from '@/contexts/AuthContext';
+import { useAppSelector } from '@/store/hooks';
+import { useLoginMutation } from '@/store/endpoints/auth';
+import { errorMessage } from '@/lib/apiError';
 
 export const LoginPage: React.FC = () => {
-  const { login, isAuthenticated, isLoading: authLoading } = useAuth();
+  const status = useAppSelector((s) => s.session.status);
+  const [login, { isLoading }] = useLoginMutation();
   const location = useLocation();
-  
+
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const authLoading = status === 'checking';
 
-  // Redirect if already authenticated
-  if (isAuthenticated) {
-    const from = (location.state as any)?.from?.pathname || '/admin';
+  if (status === 'authenticated') {
+    const from = (location.state as { from?: { pathname: string } } | null)?.from?.pathname || '/admin';
     return <Navigate to={from} replace />;
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsLoading(true);
     setError('');
-
-    if (!username || !password) {
+    if (!username.trim() || !password) {
       setError('Please fill in all fields');
-      setIsLoading(false);
       return;
     }
-
     try {
-      const success = await login(username, password);
-      if (!success) {
-        setError('Invalid username or password');
-      }
-    } catch (err: any) {
-      setError(err?.message || 'Invalid username or password');
-    } finally {
-      setIsLoading(false);
+      await login({ login: username.trim(), password }).unwrap();
+    } catch (err) {
+      setError(errorMessage(err, 'Could not sign in'));
     }
   };
-
-
 
   if (authLoading) {
     return (
@@ -116,13 +106,14 @@ export const LoginPage: React.FC = () => {
             <form onSubmit={handleSubmit} className="space-y-2 sm:space-y-3 md:space-y-4">
               {/* Username Field */}
               <div className="space-y-1 sm:space-y-2">
-                <Label htmlFor="username" className="text-xs sm:text-sm md:text-base">Username</Label>
+                <Label htmlFor="username" className="text-xs sm:text-sm md:text-base">Email or phone</Label>
                 <div className="relative">
                   <User className="absolute left-3 top-1/2 transform -translate-y-1/2 h-3 w-3 sm:h-4 sm:w-4 text-gray-400 z-10 pointer-events-none" />
                   <Input
                     id="username"
                     type="text"
-                    placeholder="Enter your username"
+                    autoComplete="username"
+                    placeholder="you@restaurant.com or 98765 43210"
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     className="pl-8 sm:pl-10 h-8 sm:h-10 md:h-11 text-xs sm:text-sm md:text-base w-full"
@@ -147,6 +138,7 @@ export const LoginPage: React.FC = () => {
                   <Input
                     id="password"
                     type={showPassword ? 'text' : 'password'}
+                    autoComplete="current-password"
                     placeholder="Enter your password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
@@ -204,9 +196,9 @@ export const LoginPage: React.FC = () => {
                 <span>Secure Access</span>
               </div>
               <ul className="text-xs text-blue-700 space-y-0.5">
-                <li>• Session expires after 8 hours</li>
-                <li>• All data is encrypted and secure</li>
-                <li>• Access logs are maintained</li>
+                <li>• You stay signed in on this device for 30 days</li>
+                <li>• Changing your password signs out every other device</li>
+                <li>• Voids, discounts and refunds are logged</li>
               </ul>
             </div>
           </CardContent>
@@ -214,8 +206,8 @@ export const LoginPage: React.FC = () => {
 
         {/* Footer */}
         <div className="text-center mt-2 sm:mt-3 md:mt-4 text-xs text-gray-500 px-1">
-          <p className="mb-0.5">© 2024 Restaurant Management System</p>
-          <p className="text-xs">Powered by ServeKaro Digital Menu</p>
+          <p className="mb-0.5">New restaurant? <Link to="/signup" className="text-accent font-medium hover:underline">Create an account</Link></p>
+          <p className="text-xs">Powered by ServeKaro</p>
         </div>
       </motion.div>
       </div>

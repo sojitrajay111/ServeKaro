@@ -1,441 +1,268 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
-import { useRestaurant } from '@/contexts/RestaurantContext';
-import { Header } from '@/components/Header';
-import { MenuCard } from '@/components/MenuCard';
-import { OrderTracker } from '@/components/customer/OrderTracker';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { motion } from 'framer-motion';
+import { Bell, ChefHat, Droplets, Leaf, Loader2, Minus, Plus, Receipt, Search, ShoppingBag, Star } from 'lucide-react';
+import { toast } from 'sonner';
+import SEO from '@/components/SEO';
 import { Button } from '@/components/ui/button';
-import { useOrders } from '@/contexts/OrdersContext';
-import { useCart } from '@/contexts/CartContext';
-import {
-  useGetCategoriesQuery,
-  useGetMenuItemsQuery,
-  useSearchMenuItemsQuery
-} from '@/store/menuApi';
-import {
-  ChefHat,
-  ArrowLeft,
-  Search,
-  Utensils,
-  Leaf,
-  Star,
-  Flame,
-} from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { FoodTypeMark } from '@/components/FoodTypeMark';
+import { ItemOptionsDialog, needsOptions, simpleLine, type ChosenLine } from '@/components/ItemOptionsDialog';
+import { useCallWaiterMutation, usePlaceOrderMutation, usePublicMenuQuery, useQrContextQuery } from '@/store/endpoints/public';
+import { useAppDispatch, useAppSelector } from '@/store/hooks';
+import { added, cartCount, cartSubtotal, customerSaved, lineKey, orderPlaced, qtyChanged, tableScanned } from '@/store/cart';
+import { useMenuStock } from '@/hooks/useRealtime';
+import { formatMoney, unitWithAddons } from '@/lib/money';
+import { errorMessage, isApiError } from '@/lib/apiError';
+import type { MenuItem, PublicMenu, PublicOutlet } from '@/types/api';
 
-type DietFilter = 'all' | 'veg' | 'nonveg';
+const TAG_LABEL = { popular: 'Popular', chefSpecial: "Chef's special", new: 'New', spicy: 'Spicy' } as const;
 
-// Helper to transform API MenuItem to Context MenuItem
-const transformMenuItem = (item: any) => ({
-  ...item,
-  popular: item.isPopular,
-  new: item.isNewItem,
-  chefRecommended: item.isChefsChoice,
-  portionSize: item.weight,
-  preparationTime: item.approxTime,
-  dietaryInfo: {
-    vegetarian: item.isVeg || false,
-    vegan: false,
-    glutenFree: false,
-    dairyFree: false,
-    spicy: false
-  },
-  images: item.images?.map((img: any) => typeof img === 'string' ? img : img.imageUrl) || ['/placeholder.svg']
-});
-
-const EmptyMenuState = ({ message = "No items found in this section." }: { message?: string }) => (
-  <motion.div
-    initial={{ opacity: 0, y: 15 }}
-    animate={{ opacity: 1, y: 0 }}
-    transition={{ duration: 0.6 }}
-    className="flex flex-col items-center justify-center py-20 px-6 text-center max-w-md mx-auto"
-  >
-    <div className="w-20 h-20 bg-amber-50 rounded-full flex items-center justify-center mb-6 shadow-inner text-amber-600">
-      <Utensils className="w-8 h-8 animate-pulse" />
-    </div>
-    <h3 className="text-xl font-bold text-gray-900 mb-2">No Delicacies Available</h3>
-    <p className="text-sm text-gray-500 leading-relaxed">{message}</p>
-  </motion.div>
-);
-
-const RestaurantMenu = () => {
+function MenuView({ outlet, menu, tableName, qrToken }: { outlet: PublicOutlet; menu: PublicMenu; tableName?: string; qrToken?: string }) {
+  const dispatch = useAppDispatch();
   const navigate = useNavigate();
-  const { restaurantId, tableId } = useParams<{ restaurantId?: string; tableId?: string }>();
-  const { currentRestaurant, loadRestaurantBySlug } = useRestaurant();
+  const cart = useAppSelector((s) => s.cart);
+  const [q, setQ] = useState('');
+  const [vegOnly, setVegOnly] = useState(false);
+  const [popularOnly, setPopularOnly] = useState(false);
+  const [activeCat, setActiveCat] = useState<string | null>(null);
+  const [optionsFor, setOptionsFor] = useState<MenuItem | null>(null);
+  const [cartOpen, setCartOpen] = useState(false);
+  const [customer, setCustomer] = useState(cart.customer);
+  const [placeOrder, placing] = usePlaceOrderMutation();
+  const [callWaiter] = useCallWaiterMutation();
+  const sectionRefs = useRef<Record<string, HTMLElement | null>>({});
+  useMenuStock(outlet.slug);
 
-  const [selectedCategory, setSelectedCategory] = useState<{ categoryId: number; categoryName: string } | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [dietFilter, setDietFilter] = useState<DietFilter>('all');
-  const [showPopularOnly, setShowPopularOnly] = useState(false);
-  const [showNewOnly, setShowNewOnly] = useState(false);
-  const [showChefRecommended, setShowChefRecommended] = useState(false);
-  const [isSearchSticky, setIsSearchSticky] = useState(false);
-  const searchBarRef = useRef<HTMLDivElement>(null);
+  const canOrder = Boolean(qrToken) && outlet.isOpen && outlet.qrOrdering.enabled;
+  const lines = qrToken && cart.qrToken === qrToken ? cart.lines : [];
 
-  const { data: apiCategories = [] } = useGetCategoriesQuery();
-  const { data: searchResults = [] } = useSearchMenuItemsQuery(
-    searchQuery,
-    { skip: searchQuery.trim().length < 2 }
-  );
+  const sections = useMemo(() => {
+    const term = q.trim().toLowerCase();
+    return menu.categories.map((c) => ({
+      ...c,
+      items: menu.items.filter((i) => i.categoryId === c.id
+        && (!vegOnly || i.foodType === 'veg')
+        && (!popularOnly || i.tags.includes('popular') || i.tags.includes('chefSpecial'))
+        && (!term || i.name.toLowerCase().includes(term) || i.description.toLowerCase().includes(term))),
+    })).filter((s) => s.items.length);
+  }, [menu, q, vegOnly, popularOnly]);
 
-  const { cartItems, getTotalPrice } = useCart();
-  const { syncCartWithAdmin } = useOrders();
+  const qtyInCart = (itemId: string) => lines.filter((l) => l.itemId === itemId).reduce((s, l) => s + l.qty, 0);
 
-  // Sticky search bar: show fixed bar only after the inline search scrolls out of view
-  useEffect(() => {
-    const el = searchBarRef.current;
-    if (!el) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => setIsSearchSticky(!entry.isIntersecting),
-      { threshold: 0, rootMargin: '-64px 0px 0px 0px' } // account for fixed header height
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
+  const add = (line: ChosenLine) => {
+    const { addonIds, ...rest } = line;
+    dispatch(added({ ...rest, addonIds, addons: line.addons }));
+  };
 
-  useEffect(() => {
-    if (restaurantId) {
-      setIsLoading(true);
-      setError(null);
-      const restaurant = loadRestaurantBySlug(restaurantId);
-      if (!restaurant) setError('Restaurant not found');
-      setIsLoading(false);
+  const tap = (item: MenuItem) => {
+    if (!canOrder || !item.inStock) return;
+    if (needsOptions(item, menu.addonGroups)) setOptionsFor(item);
+    else add(simpleLine(item, 'dine_in'));
+  };
+
+  const decrement = (item: MenuItem) => {
+    const line = [...lines].reverse().find((l) => l.itemId === item.id);
+    if (line) dispatch(qtyChanged({ key: line.key, qty: line.qty - 1 }));
+  };
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    dispatch(customerSaved(customer));
+    try {
+      const placed = await placeOrder({
+        qrToken: qrToken!,
+        customer: { name: customer.name.trim(), phone: customer.phone.trim() },
+        items: lines.map(({ itemId, variantId, addonIds, qty, note }) => ({ itemId, variantId, addonIds, qty, note })),
+      }).unwrap();
+      dispatch(orderPlaced({ trackingToken: placed.trackingToken, orderNo: placed.orderNo, tableName, at: new Date().toISOString() }));
+      setCartOpen(false);
+      navigate(`/order/${placed.trackingToken}`);
+    } catch (err) {
+      toast.error(isApiError(err) && err.code === 'VALIDATION_ERROR' && err.errors
+        ? Object.values(err.errors)[0][0]
+        : errorMessage(err, 'Could not place the order'));
     }
-  }, [restaurantId, loadRestaurantBySlug]);
+  };
 
-  useEffect(() => {
-    if (tableId && cartItems.length > 0) {
-      const orderItems = cartItems.map(item => ({
-        itemId: item.item.itemId,
-        foodName: item.item.foodName,
-        price: item.item.price,
-        quantity: item.quantity,
-        notes: item.specialInstructions
-      }));
-      syncCartWithAdmin(tableId, tableId, orderItems, getTotalPrice());
-    }
-  }, [tableId, cartItems, getTotalPrice, syncCartWithAdmin]);
+  const ring = (reason: 'waiter' | 'bill' | 'water') =>
+    callWaiter({ qrToken: qrToken!, reason }).unwrap()
+      .then(() => toast.success(reason === 'bill' ? 'The bill is on its way' : 'A waiter is coming'))
+      .catch((e) => toast.error(isApiError(e) && e.code === 'RATE_LIMITED' ? 'Already called, please wait a moment' : errorMessage(e)));
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
-      </div>
-    );
-  }
-
-  if (error || !currentRestaurant) {
-    return (
-      <div className="min-h-screen flex items-center justify-center p-6 text-center">
-        <div>
-          <ChefHat className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
-          <h2 className="text-2xl font-bold mb-2">Restaurant Not Found</h2>
-          <Button onClick={() => navigate('/')} variant="outline" className="mt-4">
-            <ArrowLeft className="w-4 h-4 mr-2" /> Back to Home
-          </Button>
-        </div>
-      </div>
-    );
-  }
+  const scrollTo = (id: string) => {
+    setActiveCat(id);
+    sectionRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
 
   return (
-    <div className="flex-1 bg-background">
-      <Header />
-
-      {/* Conditionally sticky search bar — appears below header once you scroll past the inline search */}
-      {isSearchSticky && (
-        <motion.div
-          initial={{ y: -40, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          exit={{ y: -40, opacity: 0 }}
-          transition={{ duration: 0.2 }}
-          className="fixed top-16 left-0 right-0 z-30 bg-background/95 backdrop-blur-xl border-b border-border/50 px-3 sm:px-4 md:px-6 py-2.5 shadow-sm"
-        >
-          <div className="container mx-auto">
-            <div className="relative max-w-md mx-auto group">
-              <input
-                className="w-full bg-background hover:bg-muted/40 focus:bg-background border border-border focus:border-accent px-5 py-2.5 rounded-2xl text-sm font-medium tracking-wide transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-accent/20 placeholder:text-muted-foreground shadow-sm"
-                placeholder="Search dishes..."
-                value={searchQuery}
-                onChange={(e) => { setSearchQuery(e.target.value); setSelectedCategory(null); }}
-                autoFocus={false}
-              />
-              <Search className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground transition-colors group-focus-within:text-accent pointer-events-none" />
+    <div className="min-h-screen bg-background pb-28">
+      <SEO title={`${outlet.name} – Menu`} description={`Menu of ${outlet.name}${outlet.address ? `, ${outlet.address}` : ''}`} />
+      <header className="sticky top-0 z-30 bg-background/95 backdrop-blur border-b border-border/50">
+        <div className="max-w-3xl mx-auto px-4 py-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <h1 className="text-xl font-bold truncate">{outlet.name}</h1>
+              <p className="text-xs text-muted-foreground">
+                {tableName ? `Table ${tableName}` : outlet.address}
+                {!outlet.isOpen && <span className="text-red-600 font-semibold"> · Not taking orders now</span>}
+              </p>
             </div>
+            {cart.placed.length > 0 && <Button asChild variant="outline" size="sm"><Link to="/my-orders">My orders</Link></Button>}
           </div>
-        </motion.div>
-      )}
-
-      <main className="pt-20 sm:pt-24 pb-8 sm:pb-12">
-        <div className="container mx-auto px-3 sm:px-4 md:px-6">
-
-          {/* Page Header */}
-          <motion.div
-            className="text-center mb-8 sm:mb-12"
-            initial={{ y: 50, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            transition={{ duration: 0.6 }}
-          >
-            <h1 className="display-text text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold text-primary-foreground mb-3 sm:mb-4">
-              {currentRestaurant.name}
-            </h1>
-            <p className="body-text text-base sm:text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto px-2">
-              {currentRestaurant.description || 'Discover our carefully crafted dishes, each made with the finest ingredients.'}
-            </p>
-          </motion.div>
-
-          {/* Filters Section */}
-          <motion.div
-            className="mb-8 sm:mb-12 space-y-4"
-            initial={{ y: 30, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            transition={{ duration: 0.6, delay: 0.2 }}
-          >
-            {/* Quick Filters */}
-            <div className="flex flex-wrap justify-center gap-2 px-2">
-              <Button
-                onClick={() => setShowPopularOnly(!showPopularOnly)}
-                variant={showPopularOnly ? 'default' : 'outline'}
-                size="sm"
-                className="text-xs min-h-[36px] sm:min-h-[40px] rounded-full"
-              >
-                <Star className="w-3 h-3 mr-1" />
-                Popular
-              </Button>
-              <Button
-                onClick={() => setShowNewOnly(!showNewOnly)}
-                variant={showNewOnly ? 'default' : 'outline'}
-                size="sm"
-                className="text-xs rounded-full"
-              >
-                New Items
-              </Button>
-              <Button
-                onClick={() => setShowChefRecommended(!showChefRecommended)}
-                variant={showChefRecommended ? 'default' : 'outline'}
-                size="sm"
-                className="text-xs rounded-full"
-              >
-                <ChefHat className="w-3 h-3 mr-1" />
-                Chef's Choice
-              </Button>
-            </div>
-
-            {/* Dietary Filters */}
-            <div className="flex flex-wrap justify-center gap-2">
-              <Button
-                onClick={() => setDietFilter(dietFilter === 'veg' ? 'all' : 'veg')}
-                variant={dietFilter === 'veg' ? 'default' : 'outline'}
-                size="sm"
-                className="text-xs rounded-full"
-              >
-                <Leaf className="w-3 h-3 mr-1" />
-                Vegetarian
-              </Button>
-              <Button
-                onClick={() => setDietFilter(dietFilter === 'nonveg' ? 'all' : 'nonveg')}
-                variant={dietFilter === 'nonveg' ? 'default' : 'outline'}
-                size="sm"
-                className="text-xs rounded-full"
-              >
-                <Flame className="w-3 h-3 mr-1" />
-                Non-Veg
-              </Button>
-            </div>
-
-            {/* Category Pills */}
-            <div className="w-full overflow-x-auto no-scrollbar pb-2 -mx-3 sm:mx-0">
-              <div className="flex flex-nowrap sm:flex-wrap justify-start sm:justify-center gap-2 sm:gap-3 px-3 sm:px-0 min-w-max sm:min-w-0">
-                <motion.div
-                  initial={{ scale: 0.8, opacity: 0 }}
-                  animate={{ scale: 1, opacity: 1 }}
-                  transition={{ duration: 0.4 }}
-                >
-                  <Button
-                    onClick={() => setSelectedCategory(null)}
-                    variant={!selectedCategory ? 'default' : 'outline'}
-                    size="sm"
-                    className={`transition-all duration-300 text-xs sm:text-sm px-4 sm:px-6 py-2 sm:py-5 rounded-full ${
-                      !selectedCategory
-                        ? 'bg-accent text-accent-foreground shadow-xl shadow-accent/20 border-accent/50'
-                        : 'bg-background/40 backdrop-blur-md border-accent/10 hover:border-accent/40'
-                    }`}
-                  >
-                    All Items
-                  </Button>
-                </motion.div>
-                {apiCategories.map((category, index) => (
-                  <motion.div
-                    key={category.categoryId}
-                    initial={{ scale: 0.8, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    transition={{ duration: 0.4, delay: 0.1 * (index + 1) }}
-                  >
-                    <Button
-                      onClick={() => setSelectedCategory(category)}
-                      variant={selectedCategory?.categoryId === category.categoryId ? 'default' : 'outline'}
-                      size="sm"
-                      className={`transition-all duration-300 text-xs sm:text-sm px-4 sm:px-6 py-2 sm:py-5 rounded-full ${
-                        selectedCategory?.categoryId === category.categoryId
-                          ? 'bg-accent text-accent-foreground shadow-xl shadow-accent/20 border-accent/50'
-                          : 'bg-background/40 backdrop-blur-md border-accent/10 hover:border-accent/40'
-                      }`}
-                    >
-                      {category.categoryName}
-                    </Button>
-                  </motion.div>
-                ))}
-              </div>
-            </div>
-
-            {/* Inline Search Bar (triggers sticky mode when scrolled past) */}
-            <div ref={searchBarRef} className="flex justify-center px-2">
-              <div className="relative w-full max-w-md group">
-                <input
-                  className="w-full bg-background/60 hover:bg-background focus:bg-background border border-border focus:border-accent px-6 py-3 rounded-2xl text-sm font-medium tracking-wide transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-accent/20 placeholder:text-muted-foreground shadow-sm"
-                  placeholder="Search dishes..."
-                  value={searchQuery}
-                  onChange={(e) => { setSearchQuery(e.target.value); setSelectedCategory(null); }}
-                />
-                <Search className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground transition-colors group-focus-within:text-accent pointer-events-none" />
-              </div>
-            </div>
-
-          </motion.div>
-
-          {/* Menu Items */}
-          <AnimatePresence mode="wait">
-            {searchQuery.trim().length >= 2 ? (
-              <motion.div
-                key="search"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-              >
-                {(() => {
-                  const filtered = searchResults.filter(item =>
-                    dietFilter === 'all' ? true :
-                    dietFilter === 'veg' ? item.isVeg : !item.isVeg
-                  );
-                  return filtered.length > 0 ? (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6 md:gap-8">
-                      {filtered.map((item, index) => (
-                        <MenuCard key={item.itemId} item={transformMenuItem(item)} index={index} />
-                      ))}
-                    </div>
-                  ) : (
-                    <EmptyMenuState message="No search results matched your query." />
-                  );
-                })()}
-              </motion.div>
-            ) : !selectedCategory ? (
-              <motion.div key="all" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-                {apiCategories.map((category) => (
-                  <CategorySection
-                    key={category.categoryId}
-                    category={category}
-                    dietFilter={dietFilter}
-                    showPopularOnly={showPopularOnly}
-                    showNewOnly={showNewOnly}
-                    showChefRecommended={showChefRecommended}
-                    hideIfEmpty
-                  />
-                ))}
-              </motion.div>
-            ) : (
-              <motion.div key="category" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-                <CategorySection
-                  category={selectedCategory}
-                  dietFilter={dietFilter}
-                  showPopularOnly={showPopularOnly}
-                  showNewOnly={showNewOnly}
-                  showChefRecommended={showChefRecommended}
-                />
-              </motion.div>
-            )}
-          </AnimatePresence>
+          <div className="relative mt-3">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input className="pl-10 rounded-2xl" placeholder="Search dishes" value={q} onChange={(e) => setQ(e.target.value)} />
+          </div>
+          <div className="flex gap-2 mt-3 overflow-x-auto scrollbar-hide">
+            <button onClick={() => setVegOnly(!vegOnly)} className={`pill-button whitespace-nowrap flex items-center gap-1 ${vegOnly ? 'pill-button-active' : ''}`}><Leaf className="h-3 w-3" /> Veg only</button>
+            <button onClick={() => setPopularOnly(!popularOnly)} className={`pill-button whitespace-nowrap flex items-center gap-1 ${popularOnly ? 'pill-button-active' : ''}`}><Star className="h-3 w-3" /> Popular</button>
+            {menu.categories.filter((c) => sections.some((s) => s.id === c.id)).map((c) => (
+              <button key={c.id} onClick={() => scrollTo(c.id)} className={`pill-button whitespace-nowrap ${activeCat === c.id ? 'pill-button-active' : ''}`}>{c.name}</button>
+            ))}
+          </div>
         </div>
+      </header>
+
+      <main className="max-w-3xl mx-auto px-4">
+        {sections.map((s) => (
+          <section key={s.id} ref={(el) => { sectionRefs.current[s.id] = el; }} className="pt-6 scroll-mt-40">
+            <h2 className="text-lg font-bold mb-3">{s.name}</h2>
+            <div className="divide-y divide-border/60">
+              {s.items.map((item) => {
+                const img = item.images.find((i) => i.isPrimary) ?? item.images[0];
+                const inCart = qtyInCart(item.id);
+                return (
+                  <motion.div key={item.id} layout className={`flex gap-3 py-4 ${!item.inStock ? 'opacity-50' : ''}`}>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2"><FoodTypeMark type={item.foodType} />
+                        {item.tags.slice(0, 2).map((t) => <span key={t} className="text-[10px] font-semibold uppercase text-accent">{TAG_LABEL[t]}</span>)}
+                      </div>
+                      <h3 className="font-semibold mt-1">{item.name}</h3>
+                      <p className="text-sm font-medium mt-0.5">
+                        {item.variants.length ? `${formatMoney(Math.min(...item.variants.map((v) => v.price)))} onwards` : formatMoney(item.price)}
+                      </p>
+                      {item.description && <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{item.description}</p>}
+                    </div>
+                    <div className="relative w-28 flex-shrink-0 flex flex-col items-center">
+                      {img ? <img src={img.url} alt={item.name} loading="lazy" className="h-24 w-28 rounded-xl object-cover" /> : <div className="h-16" />}
+                      {canOrder && (
+                        !item.inStock ? (
+                          <span className="-mt-3 bg-white border rounded-lg px-3 py-1 text-xs font-semibold text-red-600 shadow">Sold out</span>
+                        ) : inCart && !needsOptions(item, menu.addonGroups) ? (
+                          <div className="-mt-3 flex items-center bg-white border border-accent rounded-lg shadow">
+                            <button className="px-2 py-1 text-accent" onClick={() => decrement(item)} aria-label="Less"><Minus className="h-4 w-4" /></button>
+                            <span className="px-1 font-semibold text-accent">{inCart}</span>
+                            <button className="px-2 py-1 text-accent" onClick={() => tap(item)} aria-label="More"><Plus className="h-4 w-4" /></button>
+                          </div>
+                        ) : (
+                          <button onClick={() => tap(item)} className="-mt-3 bg-white border border-accent text-accent font-bold text-sm rounded-lg px-5 py-1 shadow hover:bg-accent hover:text-accent-foreground transition">
+                            ADD{inCart ? ` (${inCart})` : ''}
+                          </button>
+                        )
+                      )}
+                      {canOrder && needsOptions(item, menu.addonGroups) && item.inStock && <span className="text-[10px] text-muted-foreground mt-1">customisable</span>}
+                    </div>
+                  </motion.div>
+                );
+              })}
+            </div>
+          </section>
+        ))}
+        {!sections.length && <p className="text-center text-muted-foreground py-16">No dishes match.</p>}
       </main>
 
-      {/* Live order tracker — only shown when table has an active order */}
-      {tableId && <OrderTracker tableId={tableId} />}
+      {qrToken && (
+        <div className="fixed bottom-0 inset-x-0 z-40 p-3 bg-gradient-to-t from-background via-background to-transparent">
+          <div className="max-w-3xl mx-auto space-y-2">
+            {canOrder && lines.length > 0 ? (
+              <Button className="w-full h-14 text-base rounded-xl shadow-xl flex justify-between" onClick={() => setCartOpen(true)}>
+                <span className="flex items-center gap-2"><ShoppingBag className="h-5 w-5" /> {cartCount(lines)} item(s)</span>
+                <span>{formatMoney(cartSubtotal(lines))} · View cart</span>
+              </Button>
+            ) : (
+              <div className="grid grid-cols-3 gap-2">
+                <Button variant="outline" className="bg-background" onClick={() => ring('waiter')}><Bell className="h-4 w-4 mr-1" /> Waiter</Button>
+                <Button variant="outline" className="bg-background" onClick={() => ring('water')}><Droplets className="h-4 w-4 mr-1" /> Water</Button>
+                <Button variant="outline" className="bg-background" onClick={() => ring('bill')}><Receipt className="h-4 w-4 mr-1" /> Bill</Button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      <ItemOptionsDialog item={optionsFor} addonGroups={menu.addonGroups} orderType="dine_in" onClose={() => setOptionsFor(null)} onAdd={add} />
+
+      <Dialog open={cartOpen} onOpenChange={setCartOpen}>
+        <DialogContent className="max-w-md max-h-[92vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Your order{tableName && ` · Table ${tableName}`}</DialogTitle>
+            <DialogDescription>Taxes are added on the bill.</DialogDescription>
+          </DialogHeader>
+          <ul className="divide-y">
+            {lines.map((l) => (
+              <li key={l.key} className="py-3 flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="font-medium">{l.name}{l.variantName && ` (${l.variantName})`}</p>
+                  {l.addons.length > 0 && <p className="text-xs text-muted-foreground">+ {l.addons.map((a) => a.name).join(', ')}</p>}
+                  {l.note && <p className="text-xs text-amber-700">» {l.note}</p>}
+                  <p className="text-sm">{formatMoney(unitWithAddons(l.unitPrice, l.addons) * l.qty)}</p>
+                </div>
+                <div className="flex items-center border border-accent rounded-lg">
+                  <button className="px-2 py-1 text-accent" onClick={() => dispatch(qtyChanged({ key: l.key, qty: l.qty - 1 }))}><Minus className="h-4 w-4" /></button>
+                  <span className="px-1 font-semibold">{l.qty}</span>
+                  <button className="px-2 py-1 text-accent" onClick={() => dispatch(qtyChanged({ key: l.key, qty: l.qty + 1 }))}><Plus className="h-4 w-4" /></button>
+                </div>
+              </li>
+            ))}
+          </ul>
+          <form onSubmit={submit} className="space-y-3 border-t pt-3">
+            <div className="grid grid-cols-2 gap-2">
+              <div><Label className="text-xs">Your name</Label><Input required minLength={2} value={customer.name} onChange={(e) => setCustomer({ ...customer, name: e.target.value })} autoComplete="name" /></div>
+              <div><Label className="text-xs">Mobile</Label><Input required inputMode="tel" value={customer.phone} onChange={(e) => setCustomer({ ...customer, phone: e.target.value })} autoComplete="tel" /></div>
+            </div>
+            <Button type="submit" className="w-full h-12" disabled={placing.isLoading || !lines.length}>
+              {placing.isLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />} Place order · {formatMoney(cartSubtotal(lines))}
+            </Button>
+            {outlet.qrOrdering.requireAcceptance && <p className="text-xs text-center text-muted-foreground">The staff will confirm your order in a moment.</p>}
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
-};
+}
 
-const CategorySection = ({
-  category,
-  dietFilter = 'all',
-  showPopularOnly = false,
-  showNewOnly = false,
-  showChefRecommended = false,
-  hideIfEmpty = false,
-}: {
-  category: { categoryId: number; categoryName: string };
-  dietFilter?: DietFilter;
-  showPopularOnly?: boolean;
-  showNewOnly?: boolean;
-  showChefRecommended?: boolean;
-  hideIfEmpty?: boolean;
-}) => {
-  const { data: menuItems = [], isLoading } = useGetMenuItemsQuery({
-    categoryId: category.categoryId,
-  });
+const Centered = ({ children }: { children: React.ReactNode }) => (
+  <div className="min-h-screen flex flex-col items-center justify-center gap-3 p-6 text-center bg-background">{children}</div>
+);
 
-  const filtered = menuItems.filter(item => {
-    if (dietFilter === 'veg' && !item.isVeg) return false;
-    if (dietFilter === 'nonveg' && item.isVeg) return false;
-    if (showPopularOnly && !item.isPopular) return false;
-    if (showNewOnly && !item.isNewItem) return false;
-    if (showChefRecommended && !item.isChefsChoice) return false;
-    return true;
-  });
+const NotFoundMenu = () => (
+  <Centered>
+    <ChefHat className="h-12 w-12 text-muted-foreground" />
+    <h1 className="text-xl font-bold">Menu not found</h1>
+    <p className="text-muted-foreground">This QR code may be old. Please ask the staff for help.</p>
+  </Centered>
+);
 
-  if (isLoading) {
-    return (
-      <div className="flex justify-center py-12">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-      </div>
-    );
-  }
+// /t/:qrToken: scanned at a table, can order.
+export function TableMenuPage() {
+  const { qrToken = '' } = useParams();
+  const dispatch = useAppDispatch();
+  const { data, isLoading, isError } = useQrContextQuery(qrToken);
+  useEffect(() => { if (qrToken) dispatch(tableScanned(qrToken)); }, [qrToken, dispatch]);
 
-  if (filtered.length === 0) {
-    if (hideIfEmpty) return null;
-    return <EmptyMenuState message={`We couldn't find any items under "${category.categoryName}" matching your preferences.`} />;
-  }
+  if (isLoading) return <Centered><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></Centered>;
+  if (isError || !data) return <NotFoundMenu />;
+  return <MenuView outlet={data.outlet} menu={data.menu} tableName={data.table.name} qrToken={qrToken} />;
+}
 
-  return (
-    <section className="mb-12 sm:mb-16">
-      <motion.div
-        className="flex items-baseline gap-6 mb-6 sm:mb-8"
-        initial={{ y: 30, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ duration: 0.5 }}
-      >
-        <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-primary-foreground">
-          {category.categoryName}
-        </h2>
-        <span className="text-muted-foreground text-xs font-medium uppercase tracking-widest">
-          {filtered.length} Items
-        </span>
-        <div className="h-px flex-1 bg-border/60" />
-      </motion.div>
-
-      <motion.div
-        className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6 md:gap-8"
-        layout
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 0.5 }}
-      >
-        {filtered.map((item, index) => (
-          <MenuCard key={item.itemId} item={transformMenuItem(item)} index={index} />
-        ))}
-      </motion.div>
-    </section>
-  );
-};
-
-export default RestaurantMenu;
+// /menu/:slug: browse only (shared link, website).
+export default function RestaurantMenu() {
+  const { restaurantId: slug = '' } = useParams();
+  const { data, isLoading, isError } = usePublicMenuQuery(slug);
+  if (isLoading) return <Centered><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></Centered>;
+  if (isError || !data) return <NotFoundMenu />;
+  return <MenuView outlet={data.outlet} menu={data.menu} />;
+}

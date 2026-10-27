@@ -1,300 +1,259 @@
 import React, { useMemo, useState } from 'react';
-import { motion } from 'framer-motion';
-import {
-  AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
-  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
-} from 'recharts';
-import {
-  DollarSign, ShoppingCart, TrendingUp, Users,
-  Clock, Award, BarChart3, PieChart as PieIcon
-} from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Download, Loader2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { useOrders } from '@/contexts/OrdersContext';
-import { useRestaurant } from '@/contexts/RestaurantContext';
+import { Input } from '@/components/ui/input';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  downloadCsv, useAuditLogsQuery, useCategoriesReportQuery, useDayEndQuery, useItemsReportQuery,
+  usePaymentsReportQuery, useSalesReportQuery, useTaxReportQuery, type Range,
+} from '@/store/endpoints/reports';
+import { useAppSelector } from '@/store/hooks';
+import { formatMoney } from '@/lib/money';
+import { toastError } from '@/lib/apiError';
 
-const COLORS = ['#f97316', '#3b82f6', '#10b981', '#8b5cf6', '#f59e0b', '#ef4444'];
+const iso = (d: Date) => d.toLocaleDateString('en-CA');
+const daysAgo = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return iso(d); };
+const PRESETS: { label: string; range: () => Range }[] = [
+  { label: 'Today', range: () => ({ from: iso(new Date()), to: iso(new Date()) }) },
+  { label: 'Yesterday', range: () => ({ from: daysAgo(1), to: daysAgo(1) }) },
+  { label: '7 days', range: () => ({ from: daysAgo(6), to: iso(new Date()) }) },
+  { label: '30 days', range: () => ({ from: daysAgo(29), to: iso(new Date()) }) },
+  { label: 'This month', range: () => { const d = new Date(); return { from: iso(new Date(d.getFullYear(), d.getMonth(), 1)), to: iso(d) }; } },
+];
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-const fmt = (n: number) =>
-  n >= 1000 ? `$${(n / 1000).toFixed(1)}k` : `$${n.toFixed(2)}`;
+const Money = ({ v, className = '' }: { v: number; className?: string }) => <span className={`tabular-nums ${className}`}>{formatMoney(v)}</span>;
 
-const hourLabel = (h: number) => {
-  if (h === 0) return '12am';
-  if (h < 12) return `${h}am`;
-  if (h === 12) return '12pm';
-  return `${h - 12}pm`;
-};
-
-// ── Custom Tooltip ────────────────────────────────────────────────────────────
-const CustomTooltip = ({ active, payload, label }: any) => {
-  if (!active || !payload?.length) return null;
+function DataTable<T>({ rows, cols, empty = 'No data for these dates' }: {
+  rows: T[] | undefined; cols: { head: string; cell: (r: T) => React.ReactNode; right?: boolean }[]; empty?: string;
+}) {
+  if (!rows) return <Loader2 className="h-6 w-6 animate-spin mx-auto my-8 text-gray-400" />;
+  if (!rows.length) return <p className="text-center text-gray-500 py-8">{empty}</p>;
   return (
-    <div className="bg-white border border-gray-100 rounded-xl shadow-lg px-3 py-2 text-xs">
-      <p className="font-bold text-gray-700 mb-1">{label}</p>
-      {payload.map((p: any, i: number) => (
-        <p key={i} style={{ color: p.color }} className="font-semibold">
-          {p.name}: {p.name.toLowerCase().includes('revenue') || p.name === 'Revenue' ? `$${Number(p.value).toFixed(2)}` : p.value}
-        </p>
-      ))}
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead className="bg-gray-50 text-gray-600"><tr>{cols.map((c) => <th key={c.head} className={`p-3 ${c.right ? 'text-right' : 'text-left'}`}>{c.head}</th>)}</tr></thead>
+        <tbody>{rows.map((r, i) => <tr key={i} className="border-t">{cols.map((c) => <td key={c.head} className={`p-3 ${c.right ? 'text-right' : ''}`}>{c.cell(r)}</td>)}</tr>)}</tbody>
+      </table>
     </div>
   );
-};
+}
 
-// ── Main Component ────────────────────────────────────────────────────────────
+function DayEnd({ date }: { date: string }) {
+  const { data } = useDayEndQuery(date);
+  if (!data) return <Loader2 className="h-6 w-6 animate-spin mx-auto my-8 text-gray-400" />;
+  const s = data.sales;
+  return (
+    <div className="grid md:grid-cols-2 gap-4">
+      <Card>
+        <CardHeader className="pb-2"><CardTitle className="text-base">Sales · {data.date}</CardTitle></CardHeader>
+        <CardContent className="text-sm space-y-1">
+          {[['Bills', String(s.bills)], ['Gross', formatMoney(s.gross)], ['Discount', `−${formatMoney(s.discount)}`], ['Service charge', formatMoney(s.serviceCharge)],
+            ['Tax', formatMoney(s.tax)], ['Round off', formatMoney(s.roundOff)], ['Net sales', formatMoney(s.net)]].map(([k, v]) => (
+            <div key={k} className={`flex justify-between ${k === 'Net sales' ? 'font-bold border-t pt-1' : ''}`}><span>{k}</span><span className="tabular-nums">{v}</span></div>
+          ))}
+          <div className="flex justify-between text-gray-600 pt-2"><span>Void bills</span><span>{data.void.count} · {formatMoney(data.void.amount)}</span></div>
+          <div className="flex justify-between text-gray-600"><span>Complimentary</span><span>{data.complimentary.count} · {formatMoney(data.complimentary.amount)}</span></div>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader className="pb-2"><CardTitle className="text-base">Payments</CardTitle></CardHeader>
+        <CardContent className="text-sm space-y-1">
+          {data.payments.map((p) => <div key={p.mode} className="flex justify-between capitalize"><span>{p.mode === 'due' ? 'Credit' : p.mode} ({p.count})</span><Money v={p.net} /></div>)}
+          {!data.payments.length && <p className="text-gray-500">No payments</p>}
+          <h4 className="font-semibold pt-3">GST</h4>
+          {data.taxes.map((t) => <div key={`${t.name}${t.rate}`} className="flex justify-between"><span>{t.name} @ {t.rate}% on {formatMoney(t.taxable)}</span><Money v={t.amount} /></div>)}
+        </CardContent>
+      </Card>
+      <Card className="md:col-span-2">
+        <CardHeader className="pb-2"><CardTitle className="text-base">Shifts</CardTitle></CardHeader>
+        <CardContent className="p-0">
+          <DataTable rows={data.shifts} empty="No shifts" cols={[
+            { head: 'Opened', cell: (r) => new Date(r.openedAt).toLocaleTimeString('en-IN', { timeStyle: 'short' }) },
+            { head: 'Closed', cell: (r) => (r.closedAt ? new Date(r.closedAt).toLocaleTimeString('en-IN', { timeStyle: 'short' }) : 'Open') },
+            { head: 'Expected', right: true, cell: (r) => (r.expectedCash != null ? <Money v={r.expectedCash} /> : '—') },
+            { head: 'Counted', right: true, cell: (r) => (r.countedCash != null ? <Money v={r.countedCash} /> : '—') },
+            { head: 'Difference', right: true, cell: (r) => (r.difference != null ? <Money v={r.difference} className={r.difference ? 'text-red-600 font-semibold' : ''} /> : '—') },
+          ]} />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function AuditLog() {
+  const [page, setPage] = useState(1);
+  const { data } = useAuditLogsQuery({ page });
+  return (
+    <Card>
+      <CardContent className="p-0">
+        <DataTable rows={data?.data} empty="Nothing logged yet" cols={[
+          { head: 'When', cell: (r) => new Date(r.createdAt).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' }) },
+          { head: 'Who', cell: (r) => r.userName ?? '—' },
+          { head: 'What', cell: (r) => <span className="font-mono text-xs">{r.action}</span> },
+          { head: 'Details', cell: (r) => <span className="text-xs text-gray-600 break-all">{Object.entries(r.details ?? {}).map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`).join(' · ')}{r.approvedBy && ' · manager approved'}</span> },
+        ]} />
+        {data && data.meta.total > data.meta.limit && (
+          <div className="flex justify-between p-3 border-t">
+            <Button size="sm" variant="outline" disabled={page === 1} onClick={() => setPage(page - 1)}>Newer</Button>
+            <Button size="sm" variant="outline" disabled={page * data.meta.limit >= data.meta.total} onClick={() => setPage(page + 1)}>Older</Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export const SalesAnalytics: React.FC = () => {
-  const { activeOrders, customerOrders } = useOrders();
-  const { currentRestaurant, getTablesByRestaurant } = useRestaurant();
+  const [params, setParams] = useSearchParams();
+  const { accessToken, outletId } = useAppSelector((s) => s.session);
+  const [range, setRange] = useState<Range>(() => {
+    const d = params.get('date');
+    return d ? { from: d, to: d } : PRESETS[2].range();
+  });
+  const tab = params.get('tab') || 'sales';
 
-  const allOrders = useMemo(() => {
-    const live = Array.from(activeOrders.values());
-    const history = customerOrders.filter(
-      o => !live.some(l => l.orderId === o.orderId && o.orderId != null)
-    );
-    return [...live, ...history];
-  }, [activeOrders, customerOrders]);
+  const sales = useSalesReportQuery(range);
+  const items = useItemsReportQuery(range, { skip: tab !== 'items' });
+  const categories = useCategoriesReportQuery(range, { skip: tab !== 'categories' });
+  const payments = usePaymentsReportQuery(range, { skip: tab !== 'payments' });
+  const tax = useTaxReportQuery(range, { skip: tab !== 'tax' });
 
-  // ── KPIs ──────────────────────────────────────────────────────────────────
-  const totalRevenue = allOrders
-    .filter(o => o.status !== 'cancelled')
-    .reduce((s, o) => s + o.total, 0);
+  const totals = useMemo(() => (sales.data ?? []).reduce(
+    (t, r) => ({ net: t.net + r.net, bills: t.bills + r.bills, tax: t.tax + r.tax, discount: t.discount + r.discount }),
+    { net: 0, bills: 0, tax: 0, discount: 0 },
+  ), [sales.data]);
 
-  const totalOrders = allOrders.filter(o => o.status !== 'cancelled' && o.status !== 'browsing').length;
-  const avgOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
-  const tables = currentRestaurant ? getTablesByRestaurant(currentRestaurant.id) : [];
-  const occupiedTables = new Set(Array.from(activeOrders.values()).map(o => o.tableId)).size;
-
-  const kpis = [
-    { label: 'Total Revenue', value: fmt(totalRevenue), icon: DollarSign, color: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-100' },
-    { label: 'Total Orders', value: totalOrders, icon: ShoppingCart, color: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-100' },
-    { label: 'Avg Order Value', value: fmt(avgOrderValue), icon: TrendingUp, color: 'text-violet-600', bg: 'bg-violet-50', border: 'border-violet-100' },
-    { label: 'Occupied Tables', value: `${occupiedTables} / ${tables.length}`, icon: Users, color: 'text-orange-600', bg: 'bg-orange-50', border: 'border-orange-100' },
-  ];
-
-  // ── Revenue by hour ───────────────────────────────────────────────────────
-  const revenueByHour = useMemo(() => {
-    const map = new Map<number, { revenue: number; orders: number }>();
-    for (let h = 0; h < 24; h++) map.set(h, { revenue: 0, orders: 0 });
-    allOrders.filter(o => o.status !== 'cancelled' && o.status !== 'browsing').forEach(o => {
-      const h = new Date(o.createdAt).getHours();
-      const slot = map.get(h)!;
-      slot.revenue += o.total;
-      slot.orders += 1;
-    });
-    return Array.from(map.entries())
-      .map(([h, v]) => ({ hour: hourLabel(h), ...v, Revenue: +v.revenue.toFixed(2), Orders: v.orders }))
-      .filter((_, i) => i >= 6 && i <= 23); // 6am–11pm
-  }, [allOrders]);
-
-  // ── Top items ─────────────────────────────────────────────────────────────
-  const topItems = useMemo(() => {
-    const map = new Map<string, { qty: number; revenue: number }>();
-    allOrders.filter(o => o.status !== 'cancelled').forEach(o => {
-      o.items.forEach(item => {
-        const e = map.get(item.foodName) ?? { qty: 0, revenue: 0 };
-        e.qty += item.quantity;
-        e.revenue += item.price * item.quantity;
-        map.set(item.foodName, e);
-      });
-    });
-    return Array.from(map.entries())
-      .map(([name, v]) => ({ name, qty: v.qty, Revenue: +v.revenue.toFixed(2) }))
-      .sort((a, b) => b.Revenue - a.Revenue)
-      .slice(0, 7);
-  }, [allOrders]);
-
-  // ── Status breakdown (pie) ────────────────────────────────────────────────
-  const statusBreakdown = useMemo(() => {
-    const map: Record<string, number> = {};
-    allOrders.filter(o => o.status !== 'browsing').forEach(o => {
-      map[o.status] = (map[o.status] ?? 0) + 1;
-    });
-    return Object.entries(map).map(([name, value]) => ({ name, value }));
-  }, [allOrders]);
-
-  // ── Order volume by status ────────────────────────────────────────────────
-  const pendingCount = allOrders.filter(o => o.status === 'pending').length;
-  const preparingCount = allOrders.filter(o => o.status === 'preparing').length;
-  const readyCount = allOrders.filter(o => o.status === 'ready').length;
-  const completedCount = allOrders.filter(o => o.status === 'completed').length;
-
-  const isEmpty = totalOrders === 0;
+  const exportCsv = (report: string) => downloadCsv(report, range, accessToken, outletId).catch(toastError);
+  const csvButton = (report: string) => <Button size="sm" variant="outline" onClick={() => exportCsv(report)}><Download className="h-4 w-4 mr-1" /> CSV</Button>;
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-          <BarChart3 className="w-6 h-6 text-accent" />
-          Sales Analytics
-        </h1>
-        <p className="text-sm text-gray-500 mt-0.5">
-          {currentRestaurant?.name} · Live session data
-        </p>
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        {PRESETS.map((p) => (
+          <Button key={p.label} size="sm" variant={JSON.stringify(p.range()) === JSON.stringify(range) ? 'default' : 'outline'} onClick={() => setRange(p.range())}>{p.label}</Button>
+        ))}
+        <Input type="date" className="w-40 bg-white" value={range.from} max={range.to} onChange={(e) => setRange({ ...range, from: e.target.value })} />
+        <span className="text-gray-400">to</span>
+        <Input type="date" className="w-40 bg-white" value={range.to} min={range.from} onChange={(e) => setRange({ ...range, to: e.target.value })} />
       </div>
 
-      {/* KPIs */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {kpis.map((k, i) => {
-          const Icon = k.icon;
-          return (
-            <motion.div
-              key={k.label}
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.07 }}
-              className={`bg-white rounded-2xl border ${k.border} p-4 shadow-sm`}
-            >
-              <div className="flex items-start justify-between">
-                <div>
-                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">{k.label}</p>
-                  <p className={`text-2xl font-bold mt-1 ${k.color}`}>{k.value}</p>
-                </div>
-                <div className={`${k.bg} ${k.border} border rounded-xl p-2.5`}>
-                  <Icon className={`w-5 h-5 ${k.color}`} />
-                </div>
-              </div>
-            </motion.div>
-          );
-        })}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {[['Net sales', formatMoney(totals.net)], ['Bills', String(totals.bills)], ['Avg bill', formatMoney(totals.bills ? Math.round(totals.net / totals.bills) : 0)], ['Discounts', formatMoney(totals.discount)]].map(([k, v]) => (
+          <Card key={k}><CardContent className="p-4"><p className="text-xs text-gray-500">{k}</p><p className="text-xl font-bold tabular-nums">{v}</p></CardContent></Card>
+        ))}
       </div>
 
-      {isEmpty ? (
-        /* ── Empty State ── */
-        <div className="flex flex-col items-center justify-center py-24 text-center bg-white rounded-2xl border border-gray-100">
-          <div className="w-16 h-16 rounded-2xl bg-gray-50 flex items-center justify-center mb-4">
-            <BarChart3 className="w-8 h-8 text-gray-300" />
-          </div>
-          <h3 className="text-lg font-semibold text-gray-600 mb-1">No order data yet</h3>
-          <p className="text-sm text-gray-400 max-w-xs">
-            Analytics will populate automatically as orders come in during your session.
-          </p>
-        </div>
-      ) : (
-        <>
-          {/* Revenue over time */}
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-            <Card className="xl:col-span-2 rounded-2xl border-gray-100 shadow-sm">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-bold text-gray-700 flex items-center gap-2">
-                  <TrendingUp className="w-4 h-4 text-accent" />
-                  Revenue by Hour
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={220}>
-                  <AreaChart data={revenueByHour} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
-                    <defs>
-                      <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#f97316" stopOpacity={0.18} />
-                        <stop offset="95%" stopColor="#f97316" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                    <XAxis dataKey="hour" tick={{ fontSize: 10, fill: '#94a3b8' }} />
-                    <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} />
-                    <Tooltip content={<CustomTooltip />} />
-                    <Area
-                      type="monotone"
-                      dataKey="Revenue"
-                      stroke="#f97316"
-                      strokeWidth={2}
-                      fill="url(#revGrad)"
-                      dot={false}
-                      activeDot={{ r: 4, fill: '#f97316' }}
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
+      <Tabs value={tab} onValueChange={(t) => setParams({ tab: t })}>
+        <TabsList className="flex-wrap h-auto">
+          <TabsTrigger value="sales">Sales</TabsTrigger>
+          <TabsTrigger value="items">Items</TabsTrigger>
+          <TabsTrigger value="categories">Categories</TabsTrigger>
+          <TabsTrigger value="payments">Payments</TabsTrigger>
+          <TabsTrigger value="tax">GST</TabsTrigger>
+          <TabsTrigger value="dayend">Day end</TabsTrigger>
+          <TabsTrigger value="audit">Audit log</TabsTrigger>
+        </TabsList>
 
-            {/* Status Pie */}
-            <Card className="rounded-2xl border-gray-100 shadow-sm">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-bold text-gray-700 flex items-center gap-2">
-                  <PieIcon className="w-4 h-4 text-accent" />
-                  Order Status
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={160}>
-                  <PieChart>
-                    <Pie
-                      data={statusBreakdown}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={45}
-                      outerRadius={70}
-                      paddingAngle={3}
-                      dataKey="value"
-                    >
-                      {statusBreakdown.map((_, i) => (
-                        <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip content={<CustomTooltip />} />
-                  </PieChart>
-                </ResponsiveContainer>
-                <div className="grid grid-cols-2 gap-1.5 mt-2">
-                  {statusBreakdown.map((s, i) => (
-                    <div key={s.name} className="flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[i % COLORS.length] }} />
-                      <span className="text-[11px] text-gray-500 capitalize">{s.name} ({s.value})</span>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Top Items */}
-          <Card className="rounded-2xl border-gray-100 shadow-sm">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-bold text-gray-700 flex items-center gap-2">
-                <Award className="w-4 h-4 text-accent" />
-                Top Items by Revenue
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={topItems} layout="vertical" margin={{ top: 0, right: 12, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
-                  <XAxis type="number" tick={{ fontSize: 10, fill: '#94a3b8' }} />
-                  <YAxis
-                    type="category"
-                    dataKey="name"
-                    width={90}
-                    tick={{ fontSize: 10, fill: '#64748b' }}
-                  />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Bar dataKey="Revenue" fill="#f97316" radius={[0, 6, 6, 0]} maxBarSize={18}>
-                    {topItems.map((_, i) => (
-                      <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                    ))}
-                  </Bar>
+        <TabsContent value="sales" className="space-y-4">
+          <Card>
+            <CardContent className="h-64 pt-4">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={(sales.data ?? []).map((r) => ({ day: r.key.slice(5), net: r.net / 100 }))}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="day" fontSize={12} tickLine={false} />
+                  <YAxis fontSize={12} tickLine={false} width={50} tickFormatter={(v) => `₹${v >= 1000 ? `${Math.round(v / 1000)}k` : v}`} />
+                  <Tooltip formatter={(v: number) => formatMoney(v * 100)} />
+                  <Bar dataKey="net" fill="hsl(var(--accent))" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </CardContent>
           </Card>
+          <Card>
+            <CardHeader className="pb-2 flex-row items-center justify-between"><CardTitle className="text-base">By day</CardTitle>{csvButton('sales')}</CardHeader>
+            <CardContent className="p-0">
+              <DataTable rows={sales.data} cols={[
+                { head: 'Date', cell: (r) => r.key },
+                { head: 'Bills', right: true, cell: (r) => r.bills },
+                { head: 'Gross', right: true, cell: (r) => <Money v={r.gross} /> },
+                { head: 'Discount', right: true, cell: (r) => <Money v={r.discount} /> },
+                { head: 'Tax', right: true, cell: (r) => <Money v={r.tax} /> },
+                { head: 'Net', right: true, cell: (r) => <Money v={r.net} className="font-semibold" /> },
+              ]} />
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-          {/* Order pipeline summary */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {[
-              { label: 'Pending', count: pendingCount, color: 'bg-amber-500' },
-              { label: 'Preparing', count: preparingCount, color: 'bg-blue-500' },
-              { label: 'Ready', count: readyCount, color: 'bg-emerald-500' },
-              { label: 'Completed', count: completedCount, color: 'bg-slate-400' },
-            ].map(s => (
-              <div key={s.label} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex items-center gap-3">
-                <div className={`w-2.5 h-10 rounded-full ${s.color}`} />
-                <div>
-                  <p className="text-xs text-gray-400 font-medium">{s.label}</p>
-                  <p className="text-2xl font-black text-gray-900">{s.count}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
+        <TabsContent value="items">
+          <Card>
+            <CardHeader className="pb-2 flex-row items-center justify-between"><CardTitle className="text-base">Item sales</CardTitle>{csvButton('items')}</CardHeader>
+            <CardContent className="p-0">
+              <DataTable rows={items.data} cols={[
+                { head: 'Item', cell: (r) => r.name },
+                { head: 'Qty', right: true, cell: (r) => r.qty },
+                { head: 'Amount', right: true, cell: (r) => <Money v={r.amount} /> },
+              ]} />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="categories">
+          <Card>
+            <CardHeader className="pb-2 flex-row items-center justify-between"><CardTitle className="text-base">Category sales</CardTitle>{csvButton('categories')}</CardHeader>
+            <CardContent className="p-0">
+              <DataTable rows={categories.data} cols={[
+                { head: 'Category', cell: (r) => r.name ?? '—' },
+                { head: 'Qty', right: true, cell: (r) => r.qty },
+                { head: 'Amount', right: true, cell: (r) => <Money v={r.amount} /> },
+              ]} />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="payments">
+          <Card>
+            <CardHeader className="pb-2 flex-row items-center justify-between"><CardTitle className="text-base">Payment modes</CardTitle>{csvButton('payments')}</CardHeader>
+            <CardContent className="p-0">
+              <DataTable rows={payments.data} cols={[
+                { head: 'Mode', cell: (r) => <span className="capitalize">{r.mode === 'due' ? 'Credit' : r.mode}</span> },
+                { head: 'Count', right: true, cell: (r) => r.count },
+                { head: 'Received', right: true, cell: (r) => <Money v={r.amount} /> },
+                { head: 'Refunded', right: true, cell: (r) => <Money v={r.refunded} /> },
+                { head: 'Net', right: true, cell: (r) => <Money v={r.net} className="font-semibold" /> },
+              ]} />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="tax" className="space-y-4">
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-base">GST by rate</CardTitle></CardHeader>
+            <CardContent className="p-0">
+              <DataTable rows={tax.data?.byRate} cols={[
+                { head: 'Tax', cell: (r) => `${r.name} @ ${r.rate}%` },
+                { head: 'Taxable value', right: true, cell: (r) => <Money v={r.taxable} /> },
+                { head: 'Tax amount', right: true, cell: (r) => <Money v={r.amount} /> },
+              ]} />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-base">HSN summary (GSTR-1)</CardTitle></CardHeader>
+            <CardContent className="p-0">
+              <DataTable rows={tax.data?.byHsn} cols={[
+                { head: 'HSN/SAC', cell: (r) => r.hsn || '—' },
+                { head: 'GST rate', right: true, cell: (r) => `${r.rate}%` },
+                { head: 'Qty', right: true, cell: (r) => r.qty },
+                { head: 'Value', right: true, cell: (r) => <Money v={r.value} /> },
+              ]} />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="dayend"><DayEnd date={range.to} /></TabsContent>
+        <TabsContent value="audit"><AuditLog /></TabsContent>
+      </Tabs>
     </div>
   );
 };

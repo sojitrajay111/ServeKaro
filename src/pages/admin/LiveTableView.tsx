@@ -1,249 +1,179 @@
-import React from 'react';
-import { motion } from 'framer-motion';
-import {
-  Users,
-  Clock,
-  CheckCircle2,
-  UtensilsCrossed,
-  BookOpen,
-  AlertCircle,
-  TrendingUp,
-  DollarSign,
-  ShoppingCart,
-  Wifi,
-  ChevronRight
-} from 'lucide-react';
+import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { ArrowRightLeft, Clock, Combine, Loader2, Plus, ShoppingBag, Smartphone, Users } from 'lucide-react';
+import { toast } from 'sonner';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { useRestaurant } from '@/contexts/RestaurantContext';
-import { useOrders } from '@/contexts/OrdersContext';
+import { useAreasQuery, useMergeTablesMutation, useTablesQuery, useTransferTableMutation } from '@/store/endpoints/floor';
+import { useOrdersQuery } from '@/store/endpoints/orders';
+import { formatMoneyShort } from '@/lib/money';
+import { toastError } from '@/lib/apiError';
+import type { Table } from '@/types/api';
 
-const STATUS_CONFIG = {
-  empty: {
-    label: 'Empty',
-    dot: 'bg-gray-300',
-    card: 'bg-white border-gray-100',
-    badge: 'bg-gray-50 text-gray-400 border-gray-200',
-    circle: 'bg-gray-100 text-gray-500',
-    icon: Users,
-  },
-  browsing: {
-    label: 'Browsing',
-    dot: 'bg-blue-400',
-    card: 'bg-blue-50/60 border-blue-200',
-    badge: 'bg-blue-100 text-blue-700 border-blue-200',
-    circle: 'bg-blue-500 text-white',
-    icon: BookOpen,
-  },
-  pending: {
-    label: 'New Order',
-    dot: 'bg-red-500 animate-ping',
-    card: 'bg-red-50 border-red-300 shadow-red-100',
-    badge: 'bg-red-500 text-white border-red-500',
-    circle: 'bg-red-500 text-white',
-    icon: AlertCircle,
-  },
-  preparing: {
-    label: 'Preparing',
-    dot: 'bg-orange-400',
-    card: 'bg-orange-50/60 border-orange-200',
-    badge: 'bg-orange-100 text-orange-700 border-orange-200',
-    circle: 'bg-orange-500 text-white',
-    icon: UtensilsCrossed,
-  },
-  ready: {
-    label: 'Ready to Serve',
-    dot: 'bg-green-500',
-    card: 'bg-green-50/60 border-green-200',
-    badge: 'bg-green-100 text-green-700 border-green-200',
-    circle: 'bg-green-500 text-white',
-    icon: CheckCircle2,
-  },
-  completed: {
-    label: 'Bill Requested',
-    dot: 'bg-purple-400',
-    card: 'bg-purple-50/60 border-purple-200',
-    badge: 'bg-purple-100 text-purple-700 border-purple-200',
-    circle: 'bg-purple-500 text-white',
-    icon: AlertCircle,
-  },
+const STATUS_STYLE: Record<Table['status'], string> = {
+  free: 'bg-white border-gray-200 hover:border-green-400',
+  occupied: 'bg-orange-50 border-orange-300',
+  billed: 'bg-blue-50 border-blue-300',
 };
+
+const minutesSince = (iso?: string | null) => (iso ? Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000)) : 0);
 
 export const LiveTableView: React.FC = () => {
   const navigate = useNavigate();
-  const { currentRestaurant, getTablesByRestaurant } = useRestaurant();
-  const { activeOrders } = useOrders();
+  const { data: tables = [], isLoading } = useTablesQuery(undefined, { pollingInterval: 60_000 });
+  const { data: areas = [] } = useAreasQuery();
+  const { data: openOrders } = useOrdersQuery({ status: ['awaiting_acceptance', 'open', 'billed'], limit: 200 });
+  const [transfer] = useTransferTableMutation();
+  const [merge] = useMergeTablesMutation();
+  const [mode, setMode] = useState<'normal' | 'transfer' | 'merge'>('normal');
+  const [picked, setPicked] = useState<string[]>([]);
 
-  if (!currentRestaurant) return null;
+  const orders = openOrders?.data ?? [];
+  const pendingQr = orders.filter((o) => o.status === 'awaiting_acceptance' || o.items.some((i) => i.status === 'awaiting_acceptance'));
+  const nonDineIn = orders.filter((o) => o.type !== 'dine_in');
 
-  const restaurantTables = getTablesByRestaurant(currentRestaurant.id);
-  const activeOrderList = Array.from(activeOrders.values());
-  const totalRevenue = activeOrderList.reduce((sum, o) => sum + o.total, 0);
-  const occupiedCount = activeOrderList.filter(o => o.status !== 'browsing').length;
-  const occupancyRate = restaurantTables.length > 0
-    ? Math.round((occupiedCount / restaurantTables.length) * 100)
-    : 0;
-  const pendingCount = activeOrderList.filter(o => o.status === 'pending').length;
-  const readyCount = activeOrderList.filter(o => o.status === 'ready').length;
+  const grouped = useMemo(() => {
+    const byArea = new Map<string, Table[]>();
+    for (const t of tables.filter((x) => x.isActive)) {
+      const key = t.areaId || '';
+      byArea.set(key, [...(byArea.get(key) || []), t]);
+    }
+    return [...areas.map((a) => ({ id: a.id, name: a.name })), { id: '', name: areas.length ? 'Other' : 'Tables' }]
+      .map((a) => ({ ...a, tables: byArea.get(a.id) || [] }))
+      .filter((a) => a.tables.length);
+  }, [tables, areas]);
 
-  const getStatusConfig = (tableId: string) => {
-    const order = activeOrderList.find(o => o.tableId === tableId);
-    if (!order) return { cfg: STATUS_CONFIG.empty, order: null };
-    const key = order.status as keyof typeof STATUS_CONFIG;
-    return { cfg: STATUS_CONFIG[key] ?? STATUS_CONFIG.empty, order };
+  const counts = {
+    free: tables.filter((t) => t.status === 'free').length,
+    occupied: tables.filter((t) => t.status === 'occupied').length,
+    billed: tables.filter((t) => t.status === 'billed').length,
   };
 
-  const stats = [
-    { label: 'Occupied', value: occupiedCount, sub: `of ${restaurantTables.length} tables`, icon: Users, accent: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-100' },
-    { label: 'Occupancy', value: `${occupancyRate}%`, sub: 'capacity used', icon: TrendingUp, accent: 'text-violet-600', bg: 'bg-violet-50', border: 'border-violet-100' },
-    { label: 'Pending', value: pendingCount, sub: `${readyCount} ready to serve`, icon: ShoppingCart, accent: 'text-orange-600', bg: 'bg-orange-50', border: 'border-orange-100' },
-    { label: 'Live Revenue', value: `$${totalRevenue.toFixed(2)}`, sub: 'active tables', icon: DollarSign, accent: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-100' },
-  ];
+  const reset = () => { setMode('normal'); setPicked([]); };
+
+  const click = async (t: Table) => {
+    if (mode === 'normal') {
+      return navigate(t.orderId ? `/admin/orders?order=${t.orderId}` : `/admin/orders?table=${t.id}`);
+    }
+    if (mode === 'transfer') {
+      if (!picked.length) {
+        if (t.status === 'free') return toast.error('Pick a table that has an order');
+        return setPicked([t.id]);
+      }
+      if (t.status !== 'free') return toast.error('Move to a free table');
+      try {
+        await transfer({ id: picked[0], toTableId: t.id }).unwrap();
+        toast.success(`Moved to ${t.name}`);
+        reset();
+      } catch (e) { toastError(e); }
+      return;
+    }
+    if (t.status !== 'occupied') return toast.error('Only occupied, unbilled tables can be merged');
+    setPicked((p) => (p.includes(t.id) ? p.filter((x) => x !== t.id) : [...p, t.id]));
+  };
+
+  const doMerge = async () => {
+    try {
+      await merge(picked).unwrap();
+      toast.success('Tables merged');
+      reset();
+    } catch (e) { toastError(e); }
+  };
+
+  if (isLoading) return <Loader2 className="h-8 w-8 animate-spin mx-auto mt-20 text-gray-400" />;
 
   return (
-    <div className="space-y-6">
-
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            Live Table Monitor
-            <span className="flex items-center gap-1 text-xs font-semibold text-emerald-600 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
-              <Wifi className="w-3 h-3" />
-              LIVE
-            </span>
-          </h1>
-          <p className="text-sm text-gray-500 mt-0.5">{currentRestaurant.name} · Real-time floor status</p>
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex gap-2 text-sm">
+          <Badge variant="outline" className="bg-white">{counts.free} free</Badge>
+          <Badge className="bg-orange-100 text-orange-800 hover:bg-orange-100">{counts.occupied} running</Badge>
+          <Badge className="bg-blue-100 text-blue-800 hover:bg-blue-100">{counts.billed} billed</Badge>
         </div>
-
-        {/* Legend */}
-        <div className="flex flex-wrap gap-2">
-          {Object.entries(STATUS_CONFIG).map(([key, s]) => (
-            <div key={key} className="flex items-center gap-1.5 px-2.5 py-1 bg-white border border-gray-100 rounded-lg text-xs font-medium text-gray-600 shadow-sm">
-              <span className={`w-2 h-2 rounded-full ${s.dot.replace('animate-ping', '')}`} />
-              {s.label}
-            </div>
-          ))}
+        <div className="flex gap-2">
+          {mode === 'normal' ? (
+            <>
+              <Button variant="outline" size="sm" onClick={() => setMode('transfer')}><ArrowRightLeft className="h-4 w-4 mr-1" /> Move</Button>
+              <Button variant="outline" size="sm" onClick={() => setMode('merge')}><Combine className="h-4 w-4 mr-1" /> Merge</Button>
+              <Button size="sm" onClick={() => navigate('/admin/orders')}><Plus className="h-4 w-4 mr-1" /> New order</Button>
+            </>
+          ) : (
+            <>
+              <span className="text-sm text-gray-600 self-center">
+                {mode === 'transfer' ? (picked.length ? 'Now tap a free table' : 'Tap the table to move') : `Tap tables to merge (${picked.length} picked)`}
+              </span>
+              {mode === 'merge' && <Button size="sm" disabled={picked.length < 2} onClick={doMerge}>Merge</Button>}
+              <Button size="sm" variant="ghost" onClick={reset}>Cancel</Button>
+            </>
+          )}
         </div>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {stats.map((s, i) => {
-          const Icon = s.icon;
-          return (
-            <motion.div
-              key={s.label}
-              initial={{ y: 16, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              transition={{ delay: i * 0.08 }}
-              className={`bg-white border ${s.border} rounded-2xl p-4 shadow-sm`}
-            >
-              <div className="flex items-start justify-between">
-                <div>
-                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">{s.label}</p>
-                  <p className={`text-2xl font-bold mt-1 ${s.accent}`}>{s.value}</p>
-                  <p className="text-xs text-gray-400 mt-0.5">{s.sub}</p>
-                </div>
-                <div className={`${s.bg} ${s.border} border rounded-xl p-2.5`}>
-                  <Icon className={`w-5 h-5 ${s.accent}`} />
-                </div>
-              </div>
-            </motion.div>
-          );
-        })}
-      </div>
-
-      {/* Floor Plan Grid */}
-      {restaurantTables.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-24 text-center">
-          <div className="w-16 h-16 rounded-2xl bg-gray-100 flex items-center justify-center mb-4">
-            <Users className="w-8 h-8 text-gray-400" />
+      {pendingQr.length > 0 && (
+        <Card className="p-4 border-amber-300 bg-amber-50">
+          <h3 className="font-semibold text-amber-900 flex items-center gap-2 mb-2"><Smartphone className="h-4 w-4" /> QR orders waiting</h3>
+          <div className="flex flex-wrap gap-2">
+            {pendingQr.map((o) => (
+              <Button key={o.id} size="sm" variant="outline" className="bg-white" onClick={() => navigate(`/admin/orders?order=${o.id}`)}>
+                {o.tableName || `#${o.orderNo}`} · {o.items.filter((i) => i.status === 'awaiting_acceptance').length} items
+              </Button>
+            ))}
           </div>
-          <h3 className="text-lg font-semibold text-gray-700 mb-1">No tables configured</h3>
-          <p className="text-sm text-gray-400">Add tables from the QR Codes page to see them here.</p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
-          {restaurantTables.map((table, index) => {
-            const { cfg, order } = getStatusConfig(table.id);
-            const Icon = cfg.icon;
-            const isPending = order?.status === 'pending';
-
-            return (
-              <motion.div
-                key={table.id}
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ delay: index * 0.025 }}
-                onClick={() => navigate(`/admin/orders?tableId=${table.id}`)}
-                className={`relative group cursor-pointer rounded-2xl border-2 p-4 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 ${cfg.card}`}
-              >
-                {/* Ping ring for pending orders */}
-                {isPending && (
-                  <span className="absolute -top-1 -right-1 flex h-3 w-3">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
-                    <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500" />
-                  </span>
-                )}
-
-                {/* Table number circle + time */}
-                <div className="flex items-start justify-between mb-3">
-                  <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold shadow-sm ${cfg.circle}`}>
-                    {table.tableNumber}
-                  </div>
-                  {order && (
-                    <div className="flex items-center gap-1 text-[10px] text-gray-400 font-medium">
-                      <Clock className="w-2.5 h-2.5" />
-                      {new Date(order.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </div>
-                  )}
-                </div>
-
-                {/* Table name & location */}
-                <div className="mb-2">
-                  <p className="text-xs font-bold text-gray-800 leading-tight">
-                    {table.tableName || `Table ${table.tableNumber}`}
-                  </p>
-                  <p className="text-[10px] text-gray-400 mt-0.5">{table.location}</p>
-                </div>
-
-                {/* Status badge */}
-                <div className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-bold uppercase tracking-wide ${cfg.badge}`}>
-                  <Icon className="w-2.5 h-2.5" />
-                  {cfg.label}
-                </div>
-
-                {/* Order summary */}
-                {order && order.status !== 'browsing' && (
-                  <div className="mt-3 pt-2.5 border-t border-black/5">
-                    <div className="space-y-0.5 mb-2">
-                      {order.items.slice(0, 2).map((item, i) => (
-                        <div key={i} className="flex items-center gap-1 text-[10px] text-gray-600">
-                          <span className="font-bold text-gray-800">{item.quantity}×</span>
-                          <span className="truncate">{item.foodName}</span>
-                        </div>
-                      ))}
-                      {order.items.length > 2 && (
-                        <p className="text-[10px] text-gray-400 font-medium">+{order.items.length - 2} more</p>
-                      )}
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-semibold text-gray-400 uppercase">Total</span>
-                      <span className="text-sm font-bold text-gray-900">${order.total.toFixed(2)}</span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Hover chevron */}
-                <div className="absolute bottom-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <ChevronRight className="w-3.5 h-3.5 text-gray-400" />
-                </div>
-              </motion.div>
-            );
-          })}
-        </div>
+        </Card>
       )}
+
+      {grouped.map((area) => (
+        <section key={area.id || 'none'}>
+          <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-500 mb-2">{area.name}</h3>
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 xl:grid-cols-8 gap-3">
+            {area.tables.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => click(t)}
+                className={`relative aspect-square rounded-xl border-2 p-2 flex flex-col items-center justify-center transition shadow-sm
+                  ${STATUS_STYLE[t.status]} ${picked.includes(t.id) ? 'ring-4 ring-accent' : ''}`}
+              >
+                <span className="text-lg font-bold">{t.name}</span>
+                {t.status === 'free' ? (
+                  <span className="text-xs text-gray-500 flex items-center gap-1"><Users className="h-3 w-3" />{t.capacity}</span>
+                ) : (
+                  <>
+                    <span className="text-sm font-semibold tabular-nums">{formatMoneyShort(t.amount)}</span>
+                    <span className="text-[11px] text-gray-600 flex items-center gap-1"><Clock className="h-3 w-3" />{minutesSince(t.since)}m</span>
+                  </>
+                )}
+                {t.status === 'billed' && <span className="absolute top-1 right-1 text-[9px] font-bold text-blue-700">BILLED</span>}
+              </button>
+            ))}
+          </div>
+        </section>
+      ))}
+
+      {!tables.length && (
+        <Card className="p-8 text-center text-gray-600">
+          No tables yet. <Button variant="link" onClick={() => navigate('/admin/qr-codes')}>Add tables</Button>
+        </Card>
+      )}
+
+      {nonDineIn.length > 0 && (
+        <section>
+          <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-500 mb-2">Takeaway & delivery</h3>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+            {nonDineIn.map((o) => (
+              <Card key={o.id} className="p-3 cursor-pointer hover:shadow-md" onClick={() => navigate(`/admin/orders?order=${o.id}`)}>
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold flex items-center gap-1"><ShoppingBag className="h-4 w-4" /> #{o.orderNo}</span>
+                  <Badge variant="secondary" className="capitalize text-[10px]">{o.status}</Badge>
+                </div>
+                <p className="text-sm text-gray-600 truncate">{o.customer?.name || o.type.replace('_', ' ')}</p>
+                <p className="text-sm font-semibold tabular-nums">{formatMoneyShort(o.amounts.total)}</p>
+              </Card>
+            ))}
+          </div>
+        </section>
+      )}
+
     </div>
   );
 };
