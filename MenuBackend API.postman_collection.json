@@ -1,0 +1,1109 @@
+{
+  "info": {
+    "_postman_id": "77b943ee-a93d-446c-9741-2cf3b59c7085",
+    "name": "MenuBackend API",
+    "description": "Postman collection covering all endpoints in the MenuBackend N-Tier ASP.NET Core Web API.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "55535930",
+    "_collection_link": "https://go.postman.co/collection/55535930-77b943ee-a93d-446c-9741-2cf3b59c7085?source=collection_link"
+  },
+  "item": [
+    {
+      "name": "Authentication",
+      "item": [
+        {
+          "name": "Signup (Owner)",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"owner1\",\n  \"password\": \"password123\",\n  \"email\": \"owner@example.com\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/signup",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "signup"
+              ]
+            },
+            "description": "Registers a new owner account. Only one owner is allowed in the system."
+          },
+          "response": []
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.success && jsonData.data && jsonData.data.token) {",
+                  "    pm.collectionVariables.set(\"token\", jsonData.data.token);",
+                  "    console.log(\"Token automatically saved to collection variables!\");",
+                  "}"
+                ],
+                "type": "javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"owner1\",\n  \"password\": \"password123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Authenticates an admin/waiter and returns a signed JWT token."
+          },
+          "response": []
+        },
+        {
+          "name": "Forgot Password",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"owner@example.com\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/forgot-password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "forgot-password"
+              ]
+            },
+            "description": "Generates a 6-digit OTP and sends it to the admin's registered email."
+          },
+          "response": []
+        },
+        {
+          "name": "Verify OTP",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.success && jsonData.resetToken) {",
+                  "    pm.collectionVariables.set(\"resetToken\", jsonData.resetToken);",
+                  "    console.log(\"Reset Token automatically saved to collection variables!\");",
+                  "}"
+                ],
+                "type": "javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"owner@example.com\",\n  \"otpCode\": \"123456\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/verify-otp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "verify-otp"
+              ]
+            },
+            "description": "Checks whether the provided OTP is valid and returns a temporary Reset Token."
+          },
+          "response": []
+        },
+        {
+          "name": "Reset Password",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"resetToken\": \"{{resetToken}}\",\n  \"newPassword\": \"newSecurePassword123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/reset-password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "reset-password"
+              ]
+            },
+            "description": "Resets the admin's password using the temporary Reset Token."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Profile",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/profile",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "profile"
+              ]
+            },
+            "description": "Retrieves the profile details of the currently authenticated admin."
+          },
+          "response": []
+        },
+        {
+          "name": "Update Profile",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"owner_updated\",\n  \"email\": \"owner_updated@example.com\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/update-profile",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "update-profile"
+              ]
+            },
+            "description": "Updates the profile (username, email) of the currently authenticated admin."
+          },
+          "response": []
+        },
+        {
+          "name": "Create Waiter",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"waiter1\",\n  \"email\": \"waiter1@example.com\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/create-waiter",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "create-waiter"
+              ]
+            },
+            "description": "Creates a new Waiter account. Accessible only by an Owner. Returns temporary credentials and JWT."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Waiters List",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/waiters",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "waiters"
+              ]
+            },
+            "description": "Returns the full list of waiter accounts. Accessible only by an Owner."
+          },
+          "response": []
+        }
+      ],
+      "description": "Endpoints related to Admin authentication, Waiter creation, profile management, and password reset flows."
+    },
+    {
+      "name": "Menu Management",
+      "item": [
+        {
+          "name": "Get All Categories",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/menu/categories",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "menu",
+                "categories"
+              ]
+            },
+            "description": "Get all categories configured in the menu."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Menu Items by Category",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/menu/items?CategoryID=1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "menu",
+                "items"
+              ],
+              "query": [
+                {
+                  "key": "CategoryID",
+                  "value": "1",
+                  "description": "ID of the category to filter by"
+                }
+              ]
+            },
+            "description": "Get all menu items and their images for a specific category."
+          },
+          "response": []
+        },
+        {
+          "name": "Add Category",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"categoryName\": \"Starters\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/menu/categories",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "menu",
+                "categories"
+              ]
+            },
+            "description": "Creates a new menu category. Accessible only by an Owner."
+          },
+          "response": []
+        },
+        {
+          "name": "Add Menu Item",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"categoryId\": 1,\n  \"foodName\": \"Paneer Tikka\",\n  \"description\": \"Marinated cottage cheese cubes grilled to perfection.\",\n  \"price\": 12.99,\n  \"approxTime\": \"15-20 min\",\n  \"weight\": \"300g\",\n  \"isVeg\": true,\n  \"isDinner\": true,\n  \"soldOut\": false,\n  \"isPopular\": true,\n  \"isNewItem\": true,\n  \"isChefsChoice\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/menu/items",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "menu",
+                "items"
+              ]
+            },
+            "description": "Creates a new menu item. Accessible only by an Owner."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Category",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/menu/categories/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "menu",
+                "categories",
+                "1"
+              ]
+            },
+            "description": "Deletes a category by ID. Accessible only by an Owner."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Menu Item",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/menu/items/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "menu",
+                "items",
+                "1"
+              ]
+            },
+            "description": "Deletes a menu item by ID. Accessible only by an Owner."
+          },
+          "response": []
+        }
+      ],
+      "description": "CRUD operations for Categories and Menu Items."
+    },
+    {
+      "name": "Menu Image Management",
+      "item": [
+        {
+          "name": "Upload Item Images",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "Images",
+                  "type": "file",
+                  "description": "The image file(s) to upload.",
+                  "value": null
+                },
+                {
+                  "key": "MenuItemId",
+                  "value": "1",
+                  "type": "text"
+                },
+                {
+                  "key": "IsPrimary",
+                  "value": "true",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/MenuImage/upload",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "MenuImage",
+                "upload"
+              ]
+            },
+            "description": "Upload one or more menu images."
+          },
+          "response": []
+        },
+        {
+          "name": "Update Menu Image",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "ImageId",
+                  "value": "1",
+                  "type": "text"
+                },
+                {
+                  "key": "Image",
+                  "type": "file",
+                  "description": "The replacement image file.",
+                  "value": null
+                },
+                {
+                  "key": "IsPrimary",
+                  "value": "true",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/MenuImage/menu-images",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "MenuImage",
+                "menu-images"
+              ]
+            },
+            "description": "Replaces a menu image or updates its primary status."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Images by Menu Item",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/MenuImage/menu-item?menuItemId=1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "MenuImage",
+                "menu-item"
+              ],
+              "query": [
+                {
+                  "key": "menuItemId",
+                  "value": "1"
+                }
+              ]
+            },
+            "description": "Returns all images associated with a specific menu item."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Image",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/MenuImage/delete/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "MenuImage",
+                "delete",
+                "1"
+              ]
+            },
+            "description": "Deletes the image from both Cloudinary and the database by image ID."
+          },
+          "response": []
+        }
+      ],
+      "description": "Endpoints to upload, update, retrieve, and delete item images to/from Cloudinary and the database."
+    },
+    {
+      "name": "Table Management",
+      "item": [
+        {
+          "name": "Get All Tables",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/table",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "table"
+              ]
+            },
+            "description": "Retrieve all tables with their status and QR URLs."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Table by ID",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/table/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "table",
+                "1"
+              ]
+            },
+            "description": "Retrieve a specific table's details."
+          },
+          "response": []
+        },
+        {
+          "name": "Add/Update Table",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tableId\": 0,\n  \"tableNumber\": \"T-01\",\n  \"tableName\": \"VIP Corner\",\n  \"location\": \"Main Hall (Corner)\",\n  \"capacity\": 4,\n  \"isActive\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/table",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "table"
+              ]
+            },
+            "description": "Creates a new table (if tableId is 0) or updates an existing one (if tableId > 0). Accessible only by an Owner."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Table",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/table/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "table",
+                "1"
+              ]
+            },
+            "description": "Deletes a table by ID. Accessible only by an Owner."
+          },
+          "response": []
+        }
+      ],
+      "description": "Endpoints to manage restaurant physical tables, their capacities, and QR assignments."
+    },
+    {
+      "name": "Order Management",
+      "item": [
+        {
+          "name": "Place Order",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tableId\": 1,\n  \"customerName\": \"John Doe\",\n  \"customerPhone\": \"+1234567890\",\n  \"notes\": \"Extra spicy, no onions please.\",\n  \"items\": [\n    {\n      \"menuItemId\": 1,\n      \"quantity\": 2\n    },\n    {\n      \"menuItemId\": 2,\n      \"quantity\": 1\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/order",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "order"
+              ]
+            },
+            "description": "Places an order. Anonymous for customers at tables; waiter ID captured if logged in."
+          },
+          "response": []
+        },
+        {
+          "name": "Get All Orders",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/order?status=Pending",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "order"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "Pending",
+                  "description": "Filter by order status (e.g. Pending, Preparing, Served, Completed, Cancelled)"
+                }
+              ]
+            },
+            "description": "Get all orders, optionally filtered by status. Requires authentication."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Orders by Month",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/order/by-month?month=June&year=2026",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "order",
+                "by-month"
+              ],
+              "query": [
+                {
+                  "key": "month",
+                  "value": "June",
+                  "description": "Full name of the month (e.g. June)"
+                },
+                {
+                  "key": "year",
+                  "value": "2026",
+                  "description": "Optional year. Defaults to current year."
+                }
+              ]
+            },
+            "description": "Returns all orders placed in a given month. Requires authentication."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Kitchen Active Orders",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/order/kitchen",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "order",
+                "kitchen"
+              ]
+            },
+            "description": "Retrieves active orders in the kitchen (Pending & Preparing). Requires authentication."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Dashboard Stats",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/order/dashboard",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "order",
+                "dashboard"
+              ]
+            },
+            "description": "Retrieves revenue, active orders, occupancy rates, and average order values. Requires authentication."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Order by ID",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/order/1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "order",
+                "1"
+              ]
+            },
+            "description": "Retrieve full order details (including items) by ID."
+          },
+          "response": []
+        },
+        {
+          "name": "Update Order Status",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"newStatus\": \"Preparing\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/order/1/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "order",
+                "1",
+                "status"
+              ]
+            },
+            "description": "Updates order status (e.g. Preparing, Served, Completed, Cancelled). Requires authentication. Triggers SignalR notification."
+          },
+          "response": []
+        },
+        {
+          "name": "Mark Order as Paid",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"paymentMode\": \"Card\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/order/1/pay",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "order",
+                "1",
+                "pay"
+              ]
+            },
+            "description": "Marks an order as paid, sets IsPaid=true, and captures the paymentMode. Requires authentication."
+          },
+          "response": []
+        }
+      ],
+      "description": "Endpoints to place orders, check stats, update progress, and process payments."
+    },
+    {
+      "name": "Restaurant Onboarding",
+      "item": [
+        {
+          "name": "Complete Onboarding (Setup)",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"basicInfo\": {\n    \"restaurantName\": \"La Piazza\",\n    \"description\": \"Authentic wood-fired pizzas and homemade Italian pastas.\",\n    \"cuisineTypes\": [\n      \"Italian\",\n      \"Mediterranean\"\n    ]\n  },\n  \"contactInfo\": {\n    \"phoneNumber\": \"+1 (555) 019-2834\",\n    \"email\": \"contact@lapiazza.com\",\n    \"streetAddress\": \"742 Evergreen Terrace\",\n    \"city\": \"Springfield\",\n    \"state\": \"IL\",\n    \"zipCode\": \"62704\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/restaurant/setup",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "restaurant",
+                "setup"
+              ]
+            },
+            "description": "One-time setup for the restaurant details. Can only be completed once. Subsequent attempts return 409 Conflict."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Restaurant Info",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/restaurant/info",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "restaurant",
+                "info"
+              ]
+            },
+            "description": "Returns the restaurant's configuration and contact details. Requires authentication."
+          },
+          "response": []
+        },
+        {
+          "name": "Update Restaurant Info",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"restaurantName\": \"La Piazza Ristorante\",\n  \"description\": \"Newly renovated authentic wood-fired pizzas and homemade Italian pastas.\",\n  \"cuisineTypes\": [\n    \"Italian\",\n    \"Mediterranean\"\n  ],\n  \"phoneNumber\": \"+1 (555) 019-2834\",\n  \"email\": \"hello@lapiazza.com\",\n  \"streetAddress\": \"742 Evergreen Terrace\",\n  \"city\": \"Springfield\",\n  \"state\": \"IL\",\n  \"zipCode\": \"62704\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/restaurant/info",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "restaurant",
+                "info"
+              ]
+            },
+            "description": "Partially updates restaurant settings. Accessible only by an Owner."
+          },
+          "response": []
+        }
+      ],
+      "description": "Endpoints to manage the initial onboarding wizard and configuration."
+    },
+    {
+      "name": "Settings Management",
+      "item": [
+        {
+          "name": "Get Settings",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/settings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "settings"
+              ]
+            },
+            "description": "Returns the global settings of the restaurant."
+          },
+          "response": []
+        },
+        {
+          "name": "Update Settings",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"restaurantName\": \"La Piazza Ristorante\",\n  \"slug\": \"la-piazza-ristorante\",\n  \"description\": \"Fine Italian wood-fired pizza and dining.\",\n  \"cuisineTypesJson\": \"[\\\"Italian\\\", \\\"Mediterranean\\\"]\",\n  \"phone\": \"+1 (555) 019-2834\",\n  \"email\": \"hello@lapiazza.com\",\n  \"address\": \"742 Evergreen Terrace\",\n  \"city\": \"Springfield\",\n  \"state\": \"IL\",\n  \"zipCode\": \"62704\",\n  \"openingHoursJson\": \"{\\\"Monday-Friday\\\": \\\"11:00 AM - 10:00 PM\\\", \\\"Saturday-Sunday\\\": \\\"11:00 AM - 11:00 PM\\\"}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/settings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "settings"
+              ]
+            },
+            "description": "Updates or inserts the global restaurant settings. Accessible only by an Owner."
+          },
+          "response": []
+        }
+      ],
+      "description": "Endpoints to manage and update global configuration and opening hours settings."
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "requests": {},
+        "exec": [
+          ""
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "requests": {},
+        "exec": [
+          ""
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:5166"
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "resetToken",
+      "value": ""
+    }
+  ]
+}

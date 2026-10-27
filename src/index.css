@@ -1,0 +1,399 @@
+@import "tailwindcss/base";
+@import "tailwindcss/components";
+@import "tailwindcss/utilities";
+
+
+/* Magazine-style Typography - Inspired by Luxury Brands */
+.magazine-text {
+  font-family: 'Outfit', sans-serif;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  font-weight: 800;
+}
+
+.magazine-serif {
+  font-family: 'Playfair Display', serif;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
+  font-weight: 900;
+}
+
+.magazine-subtitle {
+  font-family: 'Outfit', sans-serif;
+  letter-spacing: 0.15em;
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+}
+
+/* Premium spacing and hierarchy */
+.section-spacing {
+  padding: 5rem 0;
+}
+
+@media (min-width: 768px) {
+  .section-spacing {
+    padding: 8rem 0;
+  }
+}
+
+/* Refined animations */
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-20px); }
+}
+
+/* Enhanced glass effect */
+.glass-card {
+  backdrop-filter: blur(20px);
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+/* Lune-inspired clean borders */
+.border-minimal {
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.dark .border-minimal {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Hide scrollbars for slider effect */
+.scrollbar-hide, .no-scrollbar {
+  -ms-overflow-style: none;  /* Internet Explorer 10+ */
+  scrollbar-width: none;  /* Firefox */
+}
+.scrollbar-hide::-webkit-scrollbar, .no-scrollbar::-webkit-scrollbar { 
+  display: none;  /* Safari and Chrome */
+}
+
+/* Custom Minimal Scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: hsla(var(--accent) / 0.2);
+  border-radius: 10px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: hsla(var(--accent) / 0.4);
+}
+
+/* Smooth scrolling for slider */
+.slider-container {
+  scroll-behavior: smooth;
+  transition: scroll-left 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sticky-nav {
+  position: sticky;
+  top: 60px;
+  z-index: 40;
+  backdrop-filter: blur(16px);
+  background: hsla(var(--background) / 0.8);
+  border-bottom: 1px solid hsla(var(--border));
+}
+
+.pill-button {
+  padding: 0.5rem 1rem;
+  border-radius: 9999px;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  font-weight: 500;
+  transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  white-space: nowrap;
+  border: 1px solid hsla(var(--border));
+}
+
+.pill-button-active {
+  background-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  border-color: hsl(var(--primary));
+  box-shadow: 0 4px 12px hsla(var(--primary) / 0.2);
+}
+
+/* Bella Vista Restaurant Design System - Warm & Elegant */
+
+@layer base {
+  :root {
+    /* Core Brand Colors - Warm Palette */
+    --primary: 38 40% 80%; /* #E6DECA - Warm cream */
+    --primary-foreground: 35 45% 15%; /* #2C2419 - Dark brown text */
+    
+    --secondary: 35 25% 70%; /* #D4C4A8 - Light brown */
+    --secondary-foreground: 35 45% 15%;
+    
+    --accent: 35 45% 65%; /* #D4A574 - Golden brown */
+    --accent-foreground: 35 45% 15%;
+    
+    --dark: 35 25% 45%; /* #8B7355 - Dark brown */
+    --dark-foreground: 38 40% 95%;
+    
+    /* Background & Surface Colors */
+    --background: 40 50% 98%; /* Soft warm white */
+    --foreground: 35 45% 15%; /* Dark brown text */
+    
+    --card: 38 40% 96%;
+    --card-foreground: 35 45% 15%;
+    
+    --popover: 38 40% 98%;
+    --popover-foreground: 35 45% 15%;
+    
+    /* Interactive Elements */
+    --muted: 35 25% 85%;
+    --muted-foreground: 35 25% 40%;
+    
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    
+    --border: 35 25% 80%;
+    --input: 35 25% 90%;
+    --ring: 35 45% 65%;
+    
+    /* Glass-morphism Variables */
+    --glass-bg: 38 40% 95% / 0.1;
+    --glass-border: 38 40% 80% / 0.2;
+    --glass-shadow: 35 25% 20% / 0.1;
+    
+    /* Gradients - Luxury Collection */
+    --gradient-luxury: linear-gradient(135deg, #1a1c2c 0%, #4a192c 100%);
+    --gradient-gold: linear-gradient(135deg, #d4af37 0%, #f9d976 50%, #d4af37 100%);
+    --gradient-glass: linear-gradient(135deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.05));
+    --gradient-hero: linear-gradient(180deg, #faf7f2 0%, #f0e6d2 100%);
+    --gradient-card: linear-gradient(145deg, #ffffff 0%, #f8f5f0 100%);
+    --gradient-accent: linear-gradient(135deg, #c5a059 0%, #8e6d31 100%);
+    
+    /* Shadows - Premium Depth */
+    --shadow-glass: 0 8px 32px 0 rgba(31, 38, 135, 0.07);
+    --shadow-card: 0 10px 30px -5px rgba(0, 0, 0, 0.05);
+    --shadow-hover: 0 20px 40px -10px rgba(0, 0, 0, 0.1);
+    --shadow-gold: 0 4px 15px rgba(212, 175, 55, 0.2);
+
+    --radius: 1rem; /* Soft, modern rounded edges */
+    
+    /* Typography */
+    --font-display: 'Outfit', sans-serif;
+    --font-body: 'Inter', sans-serif;
+    
+    /* Animations */
+    --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-spring: all 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    
+    --sidebar-background: 38 40% 98%;
+
+    --sidebar-foreground: 240 5.3% 26.1%;
+
+    --sidebar-primary: 240 5.9% 10%;
+
+    --sidebar-primary-foreground: 0 0% 98%;
+
+    --sidebar-accent: 240 4.8% 95.9%;
+
+    --sidebar-accent-foreground: 240 5.9% 10%;
+
+    --sidebar-border: 220 13% 91%;
+
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  .dark {
+    /* Dark mode keeps the warm theme but darker */
+    --background: 35 45% 8%;
+    --foreground: 38 40% 95%;
+    
+    --card: 35 45% 10%;
+    --card-foreground: 38 40% 95%;
+    
+    --popover: 35 45% 10%;
+    --popover-foreground: 38 40% 95%;
+    
+    --primary: 35 45% 60%;
+    --primary-foreground: 35 45% 8%;
+    
+    --secondary: 35 25% 20%;
+    --secondary-foreground: 38 40% 95%;
+    
+    --muted: 35 25% 20%;
+    --muted-foreground: 35 25% 60%;
+    
+    --accent: 35 45% 50%;
+    --accent-foreground: 35 45% 8%;
+    
+    --destructive: 0 62% 45%;
+    --destructive-foreground: 0 0% 98%;
+    
+    --border: 35 25% 25%;
+    --input: 35 25% 25%;
+    --ring: 35 45% 60%;
+    
+    --glass-bg: 35 45% 10% / 0.1;
+    --glass-border: 35 45% 30% / 0.2;
+    --glass-shadow: 0 0% 0% / 0.3;
+  }
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: var(--font-body);
+    background: var(--gradient-hero);
+    min-height: 100vh;
+  }
+  
+  /* Glass-morphism utilities */
+  .glass {
+    background: hsla(var(--glass-bg));
+    backdrop-filter: blur(20px) saturate(180%);
+    border: 1px solid hsla(var(--glass-border));
+    box-shadow: var(--shadow-glass);
+  }
+  
+  .glass-card {
+    background: var(--gradient-card);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.8);
+    box-shadow: var(--shadow-card);
+    transition: var(--transition-spring);
+  }
+  
+  .glass-card:hover {
+    box-shadow: var(--shadow-hover);
+    transform: translateY(-4px) scale(1.01);
+  }
+
+  .luxury-card {
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    position: relative;
+    overflow: hidden;
+    background: white;
+  }
+
+  .text-gold {
+    background: var(--gradient-gold);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    font-weight: 700;
+  }
+
+  .bg-gold {
+    background: var(--gradient-gold);
+    box-shadow: var(--shadow-gold);
+  }
+
+  .premium-blur {
+    backdrop-filter: blur(25px) saturate(200%);
+    background: rgba(255, 255, 255, 0.7);
+  }
+}
+
+@layer components {
+  /* Typography Classes */
+  .display-text {
+    font-family: var(--font-display);
+    font-weight: 700;
+    line-height: 1.1;
+  }
+  
+  .body-text {
+    font-family: var(--font-body);
+    line-height: 1.6;
+  }
+  
+  /* Animation Classes */
+  .animate-float {
+    animation: float 6s ease-in-out infinite;
+  }
+  
+  .animate-glow {
+    animation: glow 2s ease-in-out infinite alternate;
+  }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-10px); }
+}
+
+@keyframes glow {
+  from { box-shadow: 0 0 20px hsl(var(--accent) / 0.5); }
+  to { box-shadow: 0 0 30px hsl(var(--accent) / 0.8); }
+}
+
+/* Mobile-specific optimizations */
+@media (max-width: 768px) {
+  /* Ensure better touch targets */
+  button, a, input {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  
+  /* Prevent horizontal scroll */
+  body {
+    overflow-x: hidden;
+  }
+  
+  /* Better text readability on mobile */
+  .display-text {
+    line-height: 1.2;
+  }
+  
+  .body-text {
+    line-height: 1.5;
+  }
+  
+  /* Mobile-friendly card spacing */
+  .glass-card {
+    margin-bottom: 1rem;
+  }
+  
+  /* Improve slider scrolling on mobile */
+  .slider-container {
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x mandatory;
+  }
+  
+  .slider-container > * {
+    scroll-snap-align: start;
+  }
+  
+  /* Better mobile menu spacing */
+  .mobile-menu-open {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  
+  /* Optimize animations for mobile performance */
+  .animate-float {
+    animation-duration: 8s;
+  }
+  
+  /* Better mobile form inputs */
+  input, textarea {
+    font-size: 16px; /* Prevents zoom on iOS */
+  }
+}
+
+/* Safe area handling for modern phones */
+@supports (padding-top: env(safe-area-inset-top)) {
+  .mobile-safe-top {
+    padding-top: env(safe-area-inset-top);
+  }
+  
+  .mobile-safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
